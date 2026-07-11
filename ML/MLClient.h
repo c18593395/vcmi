@@ -143,8 +143,39 @@ namespace ML {
         const bool headless;
     };
 
-    void MMAI_DLL_LINKAGE init_vcmi(InitArgs &a);
-    void MMAI_DLL_LINKAGE start_vcmi();
-    void MMAI_DLL_LINKAGE shutdown_vcmi();
+    MMAI_DLL_LINKAGE void* CreateInitArgs(
+        const char* mapname,
+        MMAI::Schema::IModel* leftModel,
+        MMAI::Schema::IModel* rightModel,
+        bool leftAllowMlBot,
+        bool rightAllowMlBot,
+        int maxBattles,
+        int seed,
+        int randomHeroes,
+        int randomObstacles,
+        int townChance,
+        int warmachineChance,
+        int randomStackChance,
+        int tightFormationChance,
+        int randomTerrainChance,
+        int leftVipChance,
+        int rightVipChance,
+        const char* battlefieldPattern,
+        int manaMin,
+        int manaMax,
+        int swapSides,
+        const char* loglevelGlobal,
+        const char* loglevelAI,
+        const char* loglevelStats,
+        const char* statsMode,
+        const char* statsStorage,
+        int statsTimeout,
+        int statsPersistFreq,
+        bool headless
+    );
+    MMAI_DLL_LINKAGE void DestroyInitArgs(void* initArgs);
+    MMAI_DLL_LINKAGE void init_vcmi(void* initArgs);
+    MMAI_DLL_LINKAGE void start_vcmi();
+    MMAI_DLL_LINKAGE void shutdown_vcmi();
 }
 [[noreturn]] void handleFatalError(const std::string & message, bool terminate);

@@ -57,7 +57,7 @@ option(ENABLE_MMAI_TEST "Compile tests" OFF)
 
 set(MMAI_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_definitions(-DUSING_ONNX=1)
+add_definitions(-DUSING_ONNX=0)
 assign_source_group(${MMAI_FILES})
 
 if(ENABLE_STATIC_LIBS)
@@ -76,45 +76,6 @@ else()
 endif()
 
 target_link_libraries(MMAI PRIVATE vcmi)
-
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  # First try CMake config (works on Fedora, Debian, Ubuntu, Arch)
-  find_package(onnxruntime CONFIG QUIET)
-  if(onnxruntime_FOUND)
-    message(STATUS "Found onnxruntime via CMake config")
-    target_link_libraries(MMAI PRIVATE onnxruntime::onnxruntime)
-  else()
-    # Fallback to manual search for custom installs
-    message(STATUS "onnxruntime CMake config not found, trying system installation")
-    set(ONNXRUNTIME_ROOT "/opt/onnxruntime" CACHE PATH "Path to onnxruntime containing lib/onnxruntime.so and include/onnxruntime_cxx_api.h")
-    message(STATUS "Looking for onnxruntime via find_path/find_library (hint: ${ONNXRUNTIME_ROOT})")
-    find_path(ONNXRUNTIME_INCLUDE_DIR
-      NAMES onnxruntime_cxx_api.h
-      HINTS "${ONNXRUNTIME_ROOT}/include"
-      PATH_SUFFIXES
-          onnxruntime
-          include
-          include/onnxruntime
-    )
-
-    find_library(ONNXRUNTIME_LIBRARY NAMES onnxruntime libonnxruntime
-      HINTS "${ONNXRUNTIME_ROOT}/lib"
-    )
-
-    if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
-      message(STATUS "Using onnxruntime:")
-      message(STATUS "  include: ${ONNXRUNTIME_INCLUDE_DIR}")
-      message(STATUS "  library: ${ONNXRUNTIME_LIBRARY}")
-      target_include_directories(MMAI PRIVATE "${ONNXRUNTIME_INCLUDE_DIR}")
-      target_link_libraries(MMAI PRIVATE "${ONNXRUNTIME_LIBRARY}")
-    else()
-      message(FATAL_ERROR "onnxruntime not found. Install onnxruntime-devel or set ONNXRUNTIME_ROOT to a custom installation path, or disable MMAI with -DENABLE_MMAI=OFF")
-    endif()
-  endif()
-else()
-  find_package(onnxruntime CONFIG REQUIRED)
-  target_link_libraries(MMAI PRIVATE onnxruntime::onnxruntime)
-endif()
 
 # for fallback & spell casting
 add_dependencies(MMAI BattleAI)

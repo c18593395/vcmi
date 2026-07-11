@@ -579,7 +579,7 @@ bfs::path VCMIDirsXDG::userCachePath() const
 bfs::path VCMIDirsXDG::userConfigPath() const
 {
 #ifdef ML
-	return userDataPath() / "config";
+	return "./config";
 #else
 	// $XDG_CONFIG_HOME, default: $HOME/.config
 	const char * tempResult = getenv("XDG_CONFIG_HOME");
@@ -602,6 +602,12 @@ std::vector<bfs::path> VCMIDirsXDG::dataPaths() const
 	// in specification first directory has highest priority
 	// in vcmi fs last directory has highest priority
 	std::vector<bfs::path> ret;
+
+#ifdef ML
+	// In ML mode, always use current directory
+	ret.emplace_back(".");
+	return ret;
+#endif
 
 	if(developmentMode())
 	{
@@ -635,10 +641,14 @@ std::vector<bfs::path> VCMIDirsXDG::dataPaths() const
 
 bfs::path VCMIDirsXDG::libraryPath() const
 {
+#ifdef ML
+	return ".";
+#else
 	if(developmentMode())
 		return ".";
 	else
 		return M_LIB_DIR;
+#endif
 }
 
 bfs::path VCMIDirsXDG::binaryPath() const

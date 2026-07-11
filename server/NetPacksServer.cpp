@@ -410,7 +410,10 @@ void ApplyGhNetPackVisitor::visitQueryReply(QueryReply & pack)
 	gh.throwIfWrongPlayer(connection, &pack);
 
 	if(pack.qid == QueryID(-1))
-		gh.throwAndComplain(connection, "Cannot answer the query with pack.id -1!");
+		{
+			logGlobal->warn("Ignoring QueryReply with queryID==-1 (notification, not a real query)");
+			return;
+		}
 
 	result = gh.queryReply(pack.qid, pack.reply, pack.player);
 }

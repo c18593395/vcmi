@@ -50,8 +50,11 @@ int CCallback::sendQueryReply(std::optional<int32_t> reply, QueryID queryID)
 	ASSERT_IF_CALLED_WITH_PLAYER
 	if(queryID == QueryID(-1))
 	{
-		logGlobal->error("Cannot answer the query -1!");
-		return -1;
+		logGlobal->warn("Attempted to answer a notification (queryID==-1), ignoring.");
+		// queryID == -1 means this is a notification, not an actual query
+		// (see NetPacksBase.h: "equals to -1 if it is not an actual query")
+		// Do NOT send a reply for notifications - just return success.
+		return 0;
 	}
 
 	QueryReply pack(queryID, reply);

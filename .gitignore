@@ -77,3 +77,5 @@ compile_commands.json
 rel/
 actions.txt
 data/
+config/config
+AI/FuzzyLite/

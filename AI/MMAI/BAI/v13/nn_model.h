@@ -14,7 +14,9 @@
 #include "schema/base.h"
 #include "schema/v13/types.h"
 
+#if USING_ONNX
 #include <onnxruntime_cxx_api.h>
+#endif
 
 namespace MMAI::BAI::V13
 {
@@ -25,6 +27,7 @@ using Vec2D = std::vector<std::vector<T>>;
 template<class T>
 using Vec3D = std::vector<std::vector<std::vector<T>>>;
 
+#if USING_ONNX
 class NNModel : public MMAI::Schema::IModel
 {
 
@@ -64,5 +67,21 @@ private:
 	std::vector<const char *> readInputNames();
 	std::vector<const char *> readOutputNames();
 };
+#else
+class NNModel : public MMAI::Schema::IModel
+{
+public:
+	explicit NNModel(const std::shared_ptr<NNContainer> & container, float temperature, uint64_t seed)
+	{
+	}
+
+	Schema::ModelType getType() override { return Schema::ModelType::SCRIPTED; }
+	std::string getName() override { return "dummy"; }
+	int getVersion() override { return 13; }
+	Schema::Side getSide() override { return Schema::Side::LEFT; }
+	int getAction(const MMAI::Schema::IState * s) override { return 0; }
+	double getValue(const MMAI::Schema::IState * s) override { return 0.0; }
+};
+#endif
 
 }

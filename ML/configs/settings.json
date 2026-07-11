@@ -140,9 +140,9 @@
     ]
   },
   "server" : {
-    "enemyAI" : "MMAI",
+    "enemyAI" : "StupidAI",
     "friendlyAI" : "StupidAI",
-    "neutralAI" : "MMAI",
-    "playerAI" : "Nullkiller"
+    "neutralAI" : "StupidAI",
+    "playerAI" : "StupidAI"
   }
 }

@@ -18,7 +18,6 @@
 #include <chrono>
 #include <random>
 #include <cassert>
-#include <sqlite3.h>
 #include <filesystem>
 #include <sstream>
 #include <stdexcept>
@@ -26,6 +25,9 @@
 
 #include "Stats.h"
 #include "constants/Enumerations.h"
+
+#ifndef WITHOUT_SQLITE3
+#include <sqlite3.h>
 
 #define _MEASURE_START(IDENT) \
     auto measurement_start_##IDENT = std::chrono::high_resolution_clock::now(); \
@@ -45,11 +47,12 @@
     auto measurement_loglvl_##IDENT = measurement_duration_##IDENT.count() < WARN_MS ? ELogLevel::TRACE : ELogLevel::WARN; \
     logStats->log(measurement_loglvl_##IDENT, "%s: took %.0f ms", measurement_name_##IDENT, measurement_duration_##IDENT.count()); \
 }
-
+#endif
 
 VCMI_LIB_NAMESPACE_BEGIN
 
 namespace ML {
+#ifndef WITHOUT_SQLITE3
     void Error(const char* format, ...) {
         constexpr int bufferSize = 2048; // Adjust this size according to your needs
         char buffer[bufferSize];
@@ -281,6 +284,27 @@ namespace ML {
             dbupdate();
         }
     }
+#else
+    Stats::Stats(
+        std::string dbpath_,
+        int side,
+        int timeout_,
+        int persistfreq_,
+        int maxbattles_,
+        int npools,
+        int poolsize
+    ) {
+        // SQLite is disabled - no-op constructor
+    }
+
+    void Stats::dbupdate() {
+        // SQLite is disabled - no-op
+    }
+
+    void Stats::dataadd(bool victory, int pool, int heroL, int heroR) {
+        // SQLite is disabled - no-op
+    }
+#endif
 }
 
 VCMI_LIB_NAMESPACE_END

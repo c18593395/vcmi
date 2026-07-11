@@ -846,13 +846,72 @@ else()
 endif()
 
 set_target_properties(vcmi PROPERTIES COMPILE_DEFINITIONS "VCMI_DLL=1")
+# Find sqlite3 for ML Stats - use Conan's sqlite3 directly
+if(USING_CONAN)
+	# Look for sqlite3 in Conan packages
+	set(SQLITE3_INCLUDE_DIR "")
+	set(SQLITE3_LIBRARY "")
+	# Try to find sqlite3 in Conan packages
+	find_package(sqlite3 CONFIG QUIET)
+	if(TARGET sqlite3::sqlite3)
+		set(SQLITE3_TARGET sqlite3::sqlite3)
+		set(WITHOUT_SQLITE3 0)
+	else()
+		# Fallback: manually check for sqlite3 in Conan packages
+		file(GLOB CONAN_SQLITE_DIRS "${CMAKE_BINARY_DIR}/../../.conan2/p/sqlite*")
+		if(CONAN_SQLITE_DIRS)
+			list(GET CONAN_SQLITE_DIRS 0 CONAN_SQLITE_DIR)
+			if(EXISTS "${CONAN_SQLITE_DIR}/p/include/sqlite3.h")
+				set(SQLITE3_INCLUDE_DIR "${CONAN_SQLITE_DIR}/p/include")
+				file(GLOB SQLITE3_LIB_FILES "${CONAN_SQLITE_DIR}/p/lib/sqlite3*" "${CONAN_SQLITE_DIR}/p/lib/sqlite3*.lib" "${CONAN_SQLITE_DIR}/p/lib/sqlite3*.a")
+				if(SQLITE3_LIB_FILES)
+					list(GET SQLITE3_LIB_FILES 0 SQLITE3_LIBRARY)
+				endif()
+			endif()
+		endif()
+		# If still not found, check standard places
+		if(NOT SQLITE3_INCLUDE_DIR)
+			find_path(SQLITE3_INCLUDE_DIR sqlite3.h)
+			find_library(SQLITE3_LIBRARY sqlite3)
+		endif()
+		if(SQLITE3_INCLUDE_DIR AND SQLITE3_LIBRARY)
+			set(SQLITE3_TARGET "SQLITE3_LIBRARY")
+		else()
+			set(SQLITE3_TARGET "")
+			set(WITHOUT_SQLITE3 1)
+		endif()
+	endif()
+else()
+	find_package(SQLite3)
+	if(SQLite3_FOUND)
+		set(SQLITE3_TARGET SQLite::SQLite3)
+		set(WITHOUT_SQLITE3 0)
+	else()
+		set(SQLITE3_TARGET "")
+		set(WITHOUT_SQLITE3 1)
+	endif()
+endif()
+
+if(USING_CONAN)
+endif()
+
 target_link_libraries(vcmi PUBLIC
 	minizip::minizip ZLIB::ZLIB
 	${SYSTEM_LIBS} Boost::boost Boost::filesystem Boost::program_options Boost::locale Boost::date_time
 )
+if(SQLITE3_TARGET)
+	target_link_libraries(vcmi PUBLIC ${SQLITE3_TARGET})
+elseif(SQLITE3_INCLUDE_DIR AND SQLITE3_LIBRARY)
+	target_include_directories(vcmi PRIVATE ${SQLITE3_INCLUDE_DIR})
+	target_link_libraries(vcmi PRIVATE ${SQLITE3_LIBRARY})
+endif()
 
 if (NOT ENABLE_MINIMAL_LIB)
 	target_link_libraries(vcmi PUBLIC TBB::tbb)
+endif()
+
+if(WITHOUT_SQLITE3)
+	target_compile_definitions(vcmi PRIVATE WITHOUT_SQLITE3)
 endif()
 
 if(ENABLE_STATIC_LIBS AND ENABLE_CLIENT)

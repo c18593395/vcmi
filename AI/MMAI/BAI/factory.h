@@ -14,11 +14,15 @@
 
 #include "callback/CBattleGameInterface.h"
 #include "schema/base.h"
+
+#if USING_ONNX
 #include <onnxruntime_cxx_api.h>
+#endif
 
 namespace MMAI::BAI
 {
 
+#if USING_ONNX
 struct NNContainer
 {
 	std::string path;
@@ -40,6 +44,21 @@ struct NNContainer
 	{
 	}
 };
+#else
+struct NNContainer
+{
+	std::string path;
+	int version;
+
+	NNContainer(
+		const std::string & path,
+		int version
+	)
+		: path(path), version(version)
+	{
+	}
+};
+#endif
 
 // Factory method for versioned derived NNModel (e.g. BAI::V13::NNModel)
 std::shared_ptr<MMAI::Schema::IModel> CreateNNModel(const std::string & path, float temperature = 1.0, uint64_t seed = 0);

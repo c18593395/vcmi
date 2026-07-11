@@ -17,11 +17,14 @@
 #include "vstd/CLoggerBase.h"
 #include "json/JsonNode.h"
 
+#if USING_ONNX
 #include <onnxruntime_cxx_api.h>
+#endif
 
 namespace MMAI::BAI::V13
 {
 
+#if USING_ONNX
 namespace
 {
 	constexpr int LT_COUNT = EI(MMAI::Schema::V13::LinkType::_count);
@@ -596,5 +599,6 @@ Ort::Value NNModel::toTensor(const std::string & name, std::vector<T> & vec, con
 	std::memcpy(dst, vec.data(), vec.size() * sizeof(T));
 	return res;
 }
+#endif
 
 } // namespace MMAI::BAI

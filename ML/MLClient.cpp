@@ -14,9 +14,8 @@
 // limitations under the License.
 // =============================================================================
 
-#include "StdInc.h"
-#include "AsyncRunner.h"
-#include "CMT.h"
+#include "lib/StdInc.h"
+#include "lib/AsyncRunner.h"
 #include "AI/MMAI/schema/base.h"
 
 #include <boost/thread.hpp>
@@ -25,10 +24,12 @@
 #include <condition_variable>
 
 #include "AI/MMAI/schema/schema.h"
-#include "ExceptionsCommon.h"
-#include "GameEngine.h"
-#include "GameInstance.h"
-#include "MLClient.h"
+#include "lib/ExceptionsCommon.h"
+#include "client/GameEngine.h"
+#include "client/GameInstance.h"
+#include "ML/MLClient.h"
+#include "ML/model_wrappers/scripted.h"
+#include "ML/model_wrappers/function.h"
 
 #include "lib/filesystem/Filesystem.h"
 #include "lib/texts/CGeneralTextHandler.h"
@@ -38,34 +39,19 @@
 
 #include "lib/logging/CBasicLogConfigurator.h"
 
-#include "client/StdInc.h"
-#include "lib/filesystem/Filesystem.h"
-#include "lib/logging/CBasicLogConfigurator.h"
 #include "lib/CConsoleHandler.h"
-#include "lib/VCMIDirs.h"
-#include "mainmenu/CMainMenu.h"
-#include "media/CEmptyVideoPlayer.h"
-#include "media/CMusicHandler.h"
-#include "media/CSoundHandler.h"
-#include "media/CVideoHandler.h"
-#include "client/windows/CMessage.h"
-#include "client/CServerHandler.h"
-#include "client/ClientCommandManager.h"
-#include "client/gui/CursorHandler.h"
-#include "client/eventsSDL/InputHandler.h"
-#include "client/render/Graphics.h"
-#include "client/render/IScreenHandler.h"
-#include "client/CPlayerInterface.h"
-#include "client/gui/WindowHandler.h"
-
-#include "lib/filesystem/Filesystem.h"
-#include "lib/texts/CGeneralTextHandler.h"
-#include "lib/VCMIDirs.h"
-#include "lib/GameLibrary.h"
-#include "lib/CConfigHandler.h"
-#include "render/IRenderHandler.h"
+#include "client/mainmenu/CMainMenu.h"
+#include "client/media/CEmptyVideoPlayer.h"
+#include "client/render/IRenderHandler.h"
 #include "vstd/CLoggerBase.h"
-#include "windows/InfoWindows.h"
+
+// Additional includes for MLClient
+#include "client/CServerHandler.h"
+#include "client/windows/CMessage.h"
+#include "client/render/Graphics.h"  // for Graphics
+#include "client/gui/CursorHandler.h"
+#include "lib/CStopWatch.h"
+#include "client/gui/WindowHandler.h"
 
 static std::optional<std::string> criticalInitializationError;
 std::atomic<bool> headlessQuit = false;
@@ -88,6 +74,8 @@ MMAI::Schema::Baggage * baggage;
 #define LIBEXT "dylib"
 #elif defined(VCMI_UNIX)
 #define LIBEXT "so"
+#elif defined(_WIN32)
+#define LIBEXT "dll"
 #else
 #error "Unsupported OS"
 #endif
@@ -535,5 +523,167 @@ namespace ML {
 
         shutdown_vcmi();
         quitApplicationImmediately(0);
+    }
+
+    MMAI::Schema::IModel* MakeScriptedModel(std::string keyword) {
+        return new ModelWrappers::Scripted(keyword, MMAI::Schema::Side::LEFT);
+    }
+
+    MMAI::Schema::IModel* MakeUserModel(
+        int version,
+        std::function<int(const MMAI::Schema::IState*)> getAction,
+        std::function<double(const MMAI::Schema::IState*)> getValue
+    ) {
+        return new ModelWrappers::Function(version, "UserModel", MMAI::Schema::Side::LEFT, getAction, getValue);
+    }
+
+    void* CreateInitArgs(
+        const char* mapname,
+        MMAI::Schema::IModel* leftModel,
+        MMAI::Schema::IModel* rightModel,
+        bool leftAllowMlBot,
+        bool rightAllowMlBot,
+        int maxBattles,
+        int seed,
+        int randomHeroes,
+        int randomObstacles,
+        int townChance,
+        int warmachineChance,
+        int randomStackChance,
+        int tightFormationChance,
+        int randomTerrainChance,
+        int leftVipChance,
+        int rightVipChance,
+        const char* battlefieldPattern,
+        int manaMin,
+        int manaMax,
+        int swapSides,
+        const char* loglevelGlobal,
+        const char* loglevelAI,
+        const char* loglevelStats,
+        const char* statsMode,
+        const char* statsStorage,
+        int statsTimeout,
+        int statsPersistFreq,
+        bool headless
+    ) {
+        return new InitArgs(
+            std::string(mapname),
+            leftModel,
+            rightModel,
+            leftAllowMlBot,
+            rightAllowMlBot,
+            maxBattles,
+            seed,
+            randomHeroes,
+            randomObstacles,
+            townChance,
+            warmachineChance,
+            randomStackChance,
+            tightFormationChance,
+            randomTerrainChance,
+            leftVipChance,
+            rightVipChance,
+            std::string(battlefieldPattern),
+            manaMin,
+            manaMax,
+            swapSides,
+            std::string(loglevelGlobal),
+            std::string(loglevelAI),
+            std::string(loglevelStats),
+            std::string(statsMode),
+            std::string(statsStorage),
+            statsTimeout,
+            statsPersistFreq,
+            headless
+        );
+    }
+
+    void DestroyInitArgs(void* initArgs) {
+        delete static_cast<InitArgs*>(initArgs);
+    }
+
+    void init_vcmi(void* initArgs) {
+        init_vcmi(*static_cast<InitArgs*>(initArgs));
+    }
+}
+
+// =============================================================================
+// C-linkage wrapper functions for dynamic loading via GetProcAddress
+// These are exported with unmangled names, avoiding C++ name mangling
+// incompatibilities across compiler versions.
+// =============================================================================
+extern "C" {
+
+    __declspec(dllexport) MMAI::Schema::IModel* ML_MakeScriptedModel(std::string keyword) {
+        return ML::MakeScriptedModel(keyword);
+    }
+
+    __declspec(dllexport) MMAI::Schema::IModel* ML_MakeUserModel(
+        int version,
+        std::function<int(const MMAI::Schema::IState*)> getAction,
+        std::function<double(const MMAI::Schema::IState*)> getValue
+    ) {
+        return ML::MakeUserModel(version, getAction, getValue);
+    }
+
+    __declspec(dllexport) void* ML_CreateInitArgs(
+        const char* mapname,
+        MMAI::Schema::IModel* leftModel,
+        MMAI::Schema::IModel* rightModel,
+        bool leftAllowMlBot,
+        bool rightAllowMlBot,
+        int maxBattles,
+        int seed,
+        int randomHeroes,
+        int randomObstacles,
+        int townChance,
+        int warmachineChance,
+        int randomStackChance,
+        int tightFormationChance,
+        int randomTerrainChance,
+        int leftVipChance,
+        int rightVipChance,
+        const char* battlefieldPattern,
+        int manaMin,
+        int manaMax,
+        int swapSides,
+        const char* loglevelGlobal,
+        const char* loglevelAI,
+        const char* loglevelStats,
+        const char* statsMode,
+        const char* statsStorage,
+        int statsTimeout,
+        int statsPersistFreq,
+        bool headless
+    ) {
+        return ML::CreateInitArgs(
+            mapname, leftModel, rightModel,
+            leftAllowMlBot, rightAllowMlBot,
+            maxBattles, seed, randomHeroes, randomObstacles,
+            townChance, warmachineChance, randomStackChance,
+            tightFormationChance, randomTerrainChance,
+            leftVipChance, rightVipChance, battlefieldPattern,
+            manaMin, manaMax, swapSides,
+            loglevelGlobal, loglevelAI, loglevelStats,
+            statsMode, statsStorage,
+            statsTimeout, statsPersistFreq, headless
+        );
+    }
+
+    __declspec(dllexport) void ML_DestroyInitArgs(void* initArgs) {
+        ML::DestroyInitArgs(initArgs);
+    }
+
+    __declspec(dllexport) void ML_init_vcmi(void* initArgs) {
+        ML::init_vcmi(initArgs);
+    }
+
+    __declspec(dllexport) void ML_start_vcmi() {
+        ML::start_vcmi();
+    }
+
+    __declspec(dllexport) void ML_shutdown_vcmi() {
+        ML::shutdown_vcmi();
     }
 }

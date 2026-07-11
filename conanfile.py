@@ -55,4 +55,3 @@ class VCMIApp(VCMI):
 
     def requirements(self):
         super().requirements()
-        self.requires("sqlite3/^3.39")
