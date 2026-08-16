@@ -825,6 +825,7 @@ void CGameHandler::giveSpells(const CGTownInstance *t, const CGHeroInstance *h)
 
 bool CGameHandler::removeObject(const CGObjectInstance * obj, const PlayerColor & initiator)
 {
+	fprintf(stderr, "[ML-q] removeObject ENTER\n");
 	if (!obj || !gameInfo().getObj(obj->id))
 	{
 		logGlobal->error("Something wrong, that object already has been removed or hasn't existed!");
@@ -1158,6 +1159,20 @@ void CGameHandler::showBlockingDialog(const IObjectInterface * caller, BlockingD
 	auto dialogQuery = std::make_shared<CBlockingDialogQuery>(this, caller, *iw);
 	queries->addQuery(dialogQuery);
 	iw->queryID = dialogQuery->queryID;
+
+	// ML fix (2026-08-16): AI 玩家 blocking dialog 自动应答。
+	// 无头服务器 (vcmiserver) 里 AI (NK2) 的 answerQuery 任务需拿 CGameState::mutex
+	// shared_lock (AIGateway.cpp:1403), 与服务器持写锁等答案竞争 → 死锁 → query 永不答
+	// → 对象访问卡 (obj=1) → adventure_wait 超时。AI 无需人类选择: 答默认选项 0 并完成,
+	// 不发送给 AI 回调。仅无头服务器模式需要 (客户端模式 AI 独立进程自己答)。
+	const PlayerColor dialogPlayer = iw->player;
+	if(dialogPlayer.isValidPlayer() && !gameInfo().getPlayerState(dialogPlayer)->isHuman())
+	{
+		dialogQuery->setReply(0);
+		queries->popQuery(dialogQuery);
+		return;
+	}
+
 	sendAndApply(*iw);
 }
 
@@ -3433,6 +3448,19 @@ void CGameHandler::showGarrisonDialog(ObjectInstanceID upobj, ObjectInstanceID h
 
 	auto garrisonQuery = std::make_shared<CGarrisonDialogQuery>(this, upperArmy, lowerArmy);
 	queries->addQuery(garrisonQuery);
+
+	// ML fix (2026-08-17): AI 玩家英雄交换自动应答 (同 showBlockingDialog)。
+	// NK2 answerQuery 异步任务持 CGameState 共享锁 (AIGateway.cpp:1419) 与服务器
+	// 写锁竞争 → 死锁 → "Exchange between heroes" 查询永不关闭 → AIStatus q=1 永久
+	// → waitTillFree 卡死 → 英雄不动 (采集 90% 假动作)。无头服务器模式: AI 直接
+	// 答默认 0 并完成, 不发送 AI 回调 (客户端模式 AI 独立进程自己答, 不受影响)。
+	const PlayerColor garrisonPlayer = upperArmy->tempOwner;
+	if(garrisonPlayer.isValidPlayer() && !gameInfo().getPlayerState(garrisonPlayer)->isHuman())
+	{
+		garrisonQuery->setReply(0);
+		queries->popQuery(garrisonQuery);
+		return;
+	}
 
 	GarrisonDialog gd;
 	gd.hid = hid;

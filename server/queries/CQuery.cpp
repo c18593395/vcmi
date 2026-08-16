@@ -41,7 +41,10 @@ CQuery::~CQuery()
 
 void CQuery::addPlayer(PlayerColor color)
 {
-	if(color.isValidPlayer())
+	// ML fix (2026-08-17): 同阵营英雄交换 (CGarrisonDialogQuery) 会对同一 color 调两次 addPlayer,
+	// 无去重导致 players={RED,RED} → addQuery 双重 push 同一查询 → 查询栈永久污染 → NK2 查询确认链断裂
+	// → waitTillFree 永久卡死 (q=1 obj=1 mov=1) → 英雄不动。根因修复: 去重。
+	if(color.isValidPlayer() && !vstd::contains(players, color))
 		players.push_back(color);
 }
 
