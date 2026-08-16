@@ -179,6 +179,18 @@ void CGameHandler::levelUpHero(const CGHeroInstance * hero)
 	}
 	else if (hlu.skills.size() > 1)
 	{
+		// ML fix (2026-08-17): AI 玩家升级自动选第一个技能 (无头服务器模式, 同 showBlockingDialog)。
+		// NK2 heroGotLevel answerQuery 持 CGameState 共享锁与服务器写锁死锁 → 升级查询永不关闭
+		// → 压住 CBattleQuery → battleResultAccepted popIfTop FAIL → 战斗查询永久残留
+		// → "has to answer queries" 刷屏 19744 次 → NK2 动作全拒 → 采集卡死。
+		// AI 无需人工选技能: 直接取第一个并完成 (客户端模式 AI 独立进程自己答, 不受影响)。
+		const PlayerColor lvPlayer = hero->getOwner();
+		if(lvPlayer.isValidPlayer() && !gameInfo().getPlayerState(lvPlayer)->isHuman())
+		{
+			sendAndApply(hlu);
+			levelUpHero(hero, hlu.skills.front());
+			return;
+		}
 		auto levelUpQuery = std::make_shared<CHeroLevelUpDialogQuery>(this, hlu, hero);
 		queries->addQuery(levelUpQuery);
 		//level up will be called on query reply

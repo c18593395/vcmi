@@ -34,5 +34,5 @@ public:
 	std::vector<std::shared_ptr<const CQuery>> allQueries() const;
 	std::vector<QueryPtr> allQueries();
 	QueryPtr getQuery(QueryID queryID);
-	//void removeQuery
+	void removeQuery(QueryPtr query); // ML fix: 任意位置强制移除 (战斗结算兜底)
 };

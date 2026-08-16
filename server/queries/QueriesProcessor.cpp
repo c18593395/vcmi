@@ -84,6 +84,34 @@ QueryPtr QueriesProcessor::topQuery(PlayerColor player)
 	return vstd::backOrNull(queries[player]);
 }
 
+void QueriesProcessor::removeQuery(QueryPtr query)
+{
+	// ML fix (2026-08-17): 任意位置强制移除 (战斗结算兜底)。
+	// 1) onRemoval 只调一次: 多玩家查询二次触发 battleFinalize → 段错误。
+	// 2) 移除后必须触发暴露链 (对齐 popQuery): 否则被压的 visitQuery 永不 onExposure
+	//    → 访问永不结束 (obj=1 永久) → 怪物战斗收尾断 (battleFinished 不触发)。
+	if(!query)
+		return;
+	bool removalDone = false;
+	for(PlayerColor player : query->players)
+	{
+		auto & v = queries[player];
+		auto it = std::find(v.begin(), v.end(), query);
+		if(it != v.end())
+		{
+			v.erase(it);
+			if(!removalDone)
+			{
+				query->onRemoval(player);
+				removalDone = true;
+			}
+			auto nextQuery = topQuery(player);
+			if(nextQuery)
+				nextQuery->onExposure(query);
+		}
+	}
+}
+
 void QueriesProcessor::popIfTop(QueryPtr query)
 {
 	LOG_TRACE_PARAMS(logGlobal, "query='%d'", query);
