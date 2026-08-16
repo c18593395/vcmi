@@ -42,6 +42,7 @@ class AIStatus
 	bool ongoingChannelProbing; // true if AI currently explore bidirectional teleport channel exits
 
 	bool havingTurn;
+	int turnCounter = 0;   // ML fix (ring6): incremented per startedTurn, lets endTurn() detect stale turn
 
 public:
 	AIStatus(AIGateway * aiGw);
@@ -56,6 +57,7 @@ public:
 	int getQueriesCount();
 	void startedTurn();
 	void madeTurn();
+	int getTurnCounter();
 	void waitTillFree();
 	bool haveTurn();
 	void attemptedAnsweringQuery(QueryID queryID, int answerRequestID);

@@ -280,7 +280,9 @@ void BattleResultProcessor::endBattle(const CBattleInfoCallback & battle)
 	bool isDefenderHuman = defenderPlayer && defenderPlayer->isHuman();
 	bool onlyOnePlayerHuman = isAttackerHuman != isDefenderHuman;
 	// in battles against neutrals attacker can ask to replay battle manually, additionally in battles against AI player human side can also ask for replay
-	if(onlyOnePlayerHuman || IFML(true, false))
+	// ML fix (C8.5): ML 模式不要战斗结果对话框 (AI 不回答 CBattleDialogQuery → 永久卡死)
+	// 原来 IFML(true, false) 在 ENABLE_ML 下=true → 创建 dialog query 等确认 → NK2 不回答 → 卡
+	if(onlyOnePlayerHuman)
 	{
 		auto battleDialogQuery = std::make_shared<CBattleDialogQuery>(gameHandler, battle.getBattle(), battleQuery->result);
 		battleResult->queryID = battleDialogQuery->queryID;

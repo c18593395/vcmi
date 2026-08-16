@@ -34,6 +34,7 @@
 #include "../../lib/CPlayerState.h"
 
 #include "AIGateway.h"
+#include "../../ML/strategic_state.h"
 #include "Goals/Goals.h"
 
 namespace NK2AI
@@ -138,6 +139,7 @@ void AIGateway::showThievesGuildWindow(const CGObjectInstance * obj)
 
 void AIGateway::playerBlocked(int reason, bool start)
 {
+	fprintf(stderr, "[ML-mov] playerBlocked reason=%d start=%d\n", reason, (int)start);
 	LOG_TRACE_PARAMS(logAi, "reason '%i', start '%i'", reason % start);
 	if(start && reason == PlayerBlocked::UPCOMING_BATTLE)
 		status.setBattle(UPCOMING_BATTLE);
@@ -197,6 +199,7 @@ void AIGateway::artifactDisassembled(const ArtifactLocation & al)
 
 void AIGateway::heroVisit(const CGHeroInstance * visitor, const CGObjectInstance * visitedObj, bool start)
 {
+	fprintf(stderr, "[ML-obj] heroVisit start=%d obj=%s\n", (int)start, visitedObj ? visitedObj->getObjectName().c_str() : "null");
 	LOG_TRACE_PARAMS(logAi, "start '%i'; obj '%s'", start % (visitedObj ? visitedObj->getObjectName() : std::string("n/a")));
 
 	if(start && visitedObj) //we can end visit with null object, anyway
@@ -790,6 +793,9 @@ void AIGateway::makeTurn()
 				logAi->warn("Hero %s has %d MP left", h->getNameTranslated(), h->movementPointsRemaining());
 		}
 
+		// official contract: sendRequest's makeUnlockSharedGuard expects the caller to hold
+		// the CGameState read lock (it unlocks on construct, relocks on destroy). So endTurn
+		// MUST be called while gsLock is held.
 		endTurn();
 	}
 	catch (const InterruptionRequestedException &)
@@ -803,6 +809,7 @@ void AIGateway::makeTurn()
 	catch (...)
 	{
 		logAi->error("Unknown exception in makeTurn. Ending turn without calling endTurn.");
+		endTurn(); // ML fix (C8.3): 异常时必须结束回合, 否则 game 永久卡在 this player
 	}
 }
 
@@ -983,8 +990,10 @@ void AIGateway::recruitCreatures(const CGDwelling * d, const CArmedInstance * re
 
 void AIGateway::battleStart(const BattleID & battleID, const CCreatureSet * army1, const CCreatureSet * army2, int3 tile, const CGHeroInstance * hero1, const CGHeroInstance * hero2, BattleSide side, bool replayAllowed)
 {
+	fprintf(stderr, "[ML-battle] NK2 battleStart ENTER bid=%d side=%d\n", (int)battleID, (int)side);
 	assert(!playerID.isValidPlayer() || status.getBattle() == UPCOMING_BATTLE);
 	status.setBattle(ONGOING_BATTLE);
+	fprintf(stderr, "[ML-battle] NK2 battleStart set ONGOING ok\n");
 	const CGObjectInstance * presumedEnemy = vstd::backOrNull(cc->getVisitableObjs(tile)); //may be nullptr in some very are cases -> eg. visited monolith and fighting with an enemy at the FoW covered exit
 	battlename = boost::str(boost::format("Starting battle of %s attacking %s at %s") % (hero1 ? hero1->getNameTranslated() : "a army") % (presumedEnemy ? presumedEnemy->getObjectName() : "unknown enemy") % tile.toString());
 	CAdventureAI::battleStart(battleID, army1, army2, tile, hero1, hero2, side, replayAllowed);
@@ -992,6 +1001,7 @@ void AIGateway::battleStart(const BattleID & battleID, const CCreatureSet * army
 
 void AIGateway::battleEnd(const BattleID & battleID, const BattleResult * br, QueryID queryID)
 {
+	fprintf(stderr, "[ML-battle] NK2 battleEnd ENTER\n");
 	assert(status.getBattle() == ONGOING_BATTLE);
 	status.setBattle(ENDING_BATTLE);
 	bool won = br->winner == cc->getBattle(battleID)->battleGetMySide();
@@ -999,6 +1009,12 @@ void AIGateway::battleEnd(const BattleID & battleID, const BattleResult * br, Qu
 	battlename.clear();
 
 	CAdventureAI::battleEnd(battleID, br, queryID);
+
+	// ML fix (2026-08-16): 无头服务器补 battleEnded — 官方客户端由 NetPacksClient.cpp:897-899
+	// 收 BattleEnd 包时调 (IGameEventsReceiver::battleEnded)。我们 AI 跑在 vcmiserver 无客户端,
+	// 包无人收 → battleEnded 不调 → battle 状态卡 ENDING_BATTLE → waitTillFree 死等 (NK2 卡死最终根因)。
+	// battleEnded() 内 assert(status.getBattle() == ENDING_BATTLE) 此处刚 setBattle(ENDING_BATTLE) 通过。
+	battleEnded();
 
 	// gosolo
 	if(queryID != QueryID::NONE && cc->getPlayerState(playerID)->isHuman())
@@ -1032,6 +1048,23 @@ std::vector<const CGObjectInstance *> AIGateway::getFlaggedObjects() const
 
 bool AIGateway::moveHeroToTile(const int3 dst, const HeroPtr & heroPtr)
 {
+	// === ML capture hook (C8.3): NK2 决策点 — 阻塞采集 (obs, action) ===
+	if (playerID.getNum() == 0)
+	{
+		int3 from = heroPtr->visitablePos();
+		int dx = dst.x - from.x;
+		int dy = dst.y - from.y;
+		int action = 8; // 原地交互/访问对象
+		if (dx != 0 || dy != 0)
+		{
+			// 8 方向量化 (N-start CW: 0=N 1=NE 2=E 3=SE 4=S 5=SW 6=W 7=NW)
+			double ang = atan2((double)(-dy), (double)(dx)); // E=0, N=+pi/2
+			int oct = (int)lround(ang / (3.14159265358979323846 / 4.0)); // -4..4
+			static const int dir_map[9] = {6, 5, 4, 3, 2, 1, 0, 7, 6}; // oct+4 → W,SW,S,SE,E,NE,N,NW,W
+			action = dir_map[oct + 4];
+		}
+		adventure_capture_turn(0, cc.get(), action);
+	}
 	if(heroPtr->isGarrisoned() && heroPtr->getVisitedTown())
 	{
 		cc->swapGarrisonHero(heroPtr->getVisitedTown());
@@ -1321,6 +1354,11 @@ void AIGateway::tryRealize(Goals::Trade & g) //trade
 void AIGateway::endTurn()
 {
 	logAi->info("Player %d (%s) ends turn", playerID, playerID.toString());
+	// === ML capture hook (C8.3): 回合结束 — END_TURN (10) ===
+	if (playerID.getNum() == 0)
+	{
+		adventure_capture_turn(0, cc.get(), 10);
+	}
 	if(!status.haveTurn())
 	{
 		logAi->error("Not having turn at the end of turn???");
@@ -1334,11 +1372,19 @@ void AIGateway::endTurn()
 		return;
 	}
 
+	// ML fix (ring6): BattleAI/StupidAI initBattleInterface sets the shared callback's
+	// waitTillRealize=false and only restores it in the destructor; in embedded mode the
+	// battle interface object outlives the battle, so the flag stays false. That makes
+	// endTurn() not wait for confirmation -> do-while re-sends immediately -> livelock.
+	// Force wait-before-realize here so the EndTurn confirmation gate works again.
+	cc->waitTillRealize = true;
+
+	const int myTurn = status.getTurnCounter();
 	do
 	{
 		cc->endTurn();
 	}
-	while(status.haveTurn()); //for some reasons, our request may fail -> stop requesting end of turn only after we've received a confirmation that it's over
+	while(status.haveTurn() && status.getTurnCounter() == myTurn); // ML fix (ring6): stale makingTurn thread must exit once a new turn has started
 
 	logGlobal->info("Player %d (%s) ended turn", playerID, playerID.toString());
 }
@@ -1501,7 +1547,14 @@ void AIStatus::startedTurn()
 {
 	std::unique_lock<std::mutex> lock(mx);
 	havingTurn = true;
+	turnCounter++;
 	cv.notify_all();
+}
+
+int AIStatus::getTurnCounter()
+{
+	std::unique_lock<std::mutex> lock(mx);
+	return turnCounter;
 }
 
 void AIStatus::madeTurn()
@@ -1514,8 +1567,18 @@ void AIStatus::madeTurn()
 void AIStatus::waitTillFree()
 {
 	std::unique_lock<std::mutex> lock(mx);
+	int tick = 0;
 	while(battle != NO_BATTLE || !remainingQueries.empty() || !objectsBeingVisited.empty() || ongoingHeroMovement)
 	{
+		// ML debug (C8.5): 卡死定位 — 每 2s 打点打印等待条件
+		if (tick++ % 200 == 0) {
+			std::string qdesc = remainingQueries.empty() ? "-" : remainingQueries.begin()->second;
+			std::string objdesc = "-";
+			if(!objectsBeingVisited.empty() && objectsBeingVisited.back())
+				objdesc = objectsBeingVisited.back()->getObjectName();
+			fprintf(stderr, "[ML-wait] battle=%d q=%zu obj=%zu mov=%d qdesc=%s obj=%s\n",
+				(int)battle, remainingQueries.size(), objectsBeingVisited.size(), (int)ongoingHeroMovement, qdesc.c_str(), objdesc.c_str());
+		}
 		cv.wait_for(lock, std::chrono::milliseconds(10));
 		aiGw->nullkiller->makingTurnInterruption.interruptionPoint();
 	}

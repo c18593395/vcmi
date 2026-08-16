@@ -22,6 +22,11 @@
 #include "gui/WindowHandler.h"
 #include "mapView/mapHandler.h"
 
+// 2026-08-01: 跨 .so 直传 red 冒险 AI 名 (MLClient.cpp 定义, settings 写读层不一致绕过)
+extern "C" {
+    extern char g_adventure_allied_ai[64];
+}
+
 #include "../lib/CConfigHandler.h"
 #include "../lib/GameLibrary.h"
 #include "../lib/battle/BattleInfo.h"
@@ -262,7 +267,12 @@ void CClient::initPlayerInterfaces()
 					if (gameState().getPlayerTeam(allyInfo.first) == gameState().getPlayerTeam(playerInfo.first) && allyInfo.second.isControlledByHuman())
 						alliedToHuman = true;
 
-				auto AiToGive = aiNameForPlayer(playerInfo.second, false, alliedToHuman);
+				// ML: player 0 (red) is always the RL model via MMAI (adventureAlliedAI).
+				// Other players use the configured AI (adventureEnemyAI = Nullkiller2 for real opponents).
+				// 2026-08-01: settings 写读层不一致 (MLClient 写 session, 这里读配置层) — 改用跨 .so 全局直传
+				auto AiToGive = (color == PlayerColor(0))
+					? (g_adventure_allied_ai[0] ? g_adventure_allied_ai : settings["ai"]["adventureAlliedAI"].String())
+					: aiNameForPlayer(playerInfo.second, false, alliedToHuman);
 				logNetwork->info("Player %s will be lead by %s", color.toString(), AiToGive);
 				installNewPlayerInterface(CDynLibHandler::getNewAI(AiToGive), color);
 			}
@@ -340,7 +350,10 @@ void CClient::installNewBattleInterface(std::shared_ptr<CBattleGameInterface> ba
 		logGlobal->trace("\tInitializing the battle interface for player %s", color.toString());
 		auto cbc = std::make_shared<CBattleCallback>(color, this);
 		battleCallbacks[color] = cbc;
-		battleInterface->initBattleInterface(playerEnvironments.at(color), cbc, aiCombatOptions);
+
+		auto &env = playerEnvironments.at(color);
+
+		battleInterface->initBattleInterface(env, cbc, aiCombatOptions);
 	}
 }
 
@@ -389,6 +402,7 @@ int CClient::sendRequest(const CPackForServer & request, PlayerColor player, boo
 
 void CClient::battleStarted(const BattleID & battleID)
 {
+	fprintf(stderr, "[ML-battleStarted] begin bid=%d\n", battleID.getNum());
 	const BattleInfo * info = gameState().getBattle(battleID);
 
 	std::shared_ptr<CPlayerInterface> att;
@@ -399,14 +413,20 @@ void CClient::battleStarted(const BattleID & battleID)
 	for(auto & battleCb : battleCallbacks)
 	{
 		if(!battleCb.first.isValidPlayer() || battleCb.first == leftSide.color || battleCb.first == rightSide.color)
+		{
+			fprintf(stderr, "[ML-battleStarted] onBattleStarted color=%s\n", battleCb.first.toString().c_str());
 			battleCb.second->onBattleStarted(info);
+		}
 	}
 
 	//If quick combat is not, do not prepare interfaces for battleint
 	auto callBattleStart = [&](PlayerColor color, BattleSide side)
 	{
 		if(vstd::contains(battleints, color))
+		{
+			fprintf(stderr, "[ML-battleStarted] battleStart color=%s\n", color.toString().c_str());
 			battleints[color]->battleStart(info->battleID, leftSide.getArmy(), rightSide.getArmy(), info->tile, leftSide.getHero(), rightSide.getHero(), side, info->replayAllowed);
+		}
 	};
 	
 	callBattleStart(leftSide.color, BattleSide::LEFT_SIDE);

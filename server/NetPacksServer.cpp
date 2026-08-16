@@ -44,6 +44,9 @@ void ApplyGhNetPackVisitor::visitGamePause(GamePause & pack)
 
 void ApplyGhNetPackVisitor::visitEndTurn(EndTurn & pack)
 {
+	for(auto ap : gh.gameState().actingPlayers)
+		fprintf(stderr, "%d ", ap.getNum());
+	fprintf(stderr, ")\n");
 	gh.throwIfWrongPlayer(connection, &pack);
 	gh.throwIfPlayerNotActive(connection, &pack);
 	result = gh.turnOrder->onPlayerEndsTurn(pack.player);

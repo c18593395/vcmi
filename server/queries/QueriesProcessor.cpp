@@ -18,6 +18,10 @@ void QueriesProcessor::popQuery(PlayerColor player, QueryPtr query)
 	if(topQuery(player) != query)
 	{
 		logGlobal->trace("Cannot remove, not a top!");
+		fprintf(stderr, "[ML-q] popQuery FAIL player=%d target=%s\n",
+			player.getNum(), query->toString().c_str());
+		for(const auto & q : queries[player])
+			fprintf(stderr, "  [ML-q]   stack: %s\n", q->toString().c_str());
 		return;
 	}
 
@@ -92,8 +96,20 @@ void QueriesProcessor::popIfTop(QueryPtr query)
 void QueriesProcessor::popIfTop(const CQuery & query)
 {
 	for(PlayerColor color : query.players)
-		if(topQuery(color).get() == &query)
-			popQuery(color, topQuery(color));
+	{
+		auto top = topQuery(color);
+		if(top.get() == &query)
+			popQuery(color, top);
+		else
+		{
+			// ML debug (ring 6): popIfTop FAIL = blocking query on top
+			fprintf(stderr, "[ML-q] popIfTop FAIL color=%d target=%s top=%s\n",
+				color.getNum(), query.toString().c_str(),
+				top ? top->toString().c_str() : "null");
+			for(const auto & q : queries[color])
+				fprintf(stderr, "  [ML-q]   stack: %s\n", q->toString().c_str());
+		}
+	}
 }
 
 std::vector<std::shared_ptr<const CQuery>> QueriesProcessor::allQueries() const
