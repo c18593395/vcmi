@@ -879,10 +879,19 @@ void CServerHandler::debugStartTest(std::string filename, bool save)
 	while(!settings["session"]["headless"].Bool() && !ENGINE->windows().topWindow<CLobbyScreen>())
 		std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-	while(!mi || mapInfo->fileURI != mi->fileURI)
+	// 2026-08-17: mi 回显等待 — 服务器广播链路由 mapInfo 序列化问题导致 mi 可能不更新
+	// (客户端 mi=NULL 死循环 setMapInfo)。超时兜底: 10s 后继续流程 (setPlayer + sendStartGame)
+	int mi_wait_ms = 0;
+	while(!mi || !boost::iequals(mapInfo->fileURI, mi->fileURI))
 	{
+		if(mi_wait_ms > 10000)
+		{
+			logGlobal->warn("[ML-DEBUG] mi wait timeout %dms, continuing anyway", mi_wait_ms);
+			break;
+		}
 		setMapInfo(mapInfo);
 		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		mi_wait_ms += 50;
 	}
 	if(settings["session"]["onlyai"].Bool())
 	{

@@ -23,9 +23,9 @@
 #include "mapView/mapHandler.h"
 
 // 2026-08-01: 跨 .so 直传 red 冒险 AI 名 (MLClient.cpp 定义, settings 写读层不一致绕过)
-extern "C" {
-    extern char g_adventure_allied_ai[64];
-}
+// 2026-08-17: weak 定义兜底 — vcmiclient (clientapp) 不链接 libmlclient.so,
+// 无 MLClient.cpp 的强定义 → 链接错误。weak 符号: ML 强定义优先, 客户端默认空 (走 settings)。
+extern "C" __attribute__((weak)) char g_adventure_allied_ai[64] = "";
 
 #include "../lib/CConfigHandler.h"
 #include "../lib/GameLibrary.h"
