@@ -1372,7 +1372,8 @@ void CPlayerInterface::initializeHeroTownList()
 			localState->addOwnedTown(town);
 	}
 
-	localState->deserialize(*cb->getPlayerState(playerID)->playerLocalSettings);
+	if(const auto * ps = cb->getPlayerState(playerID)) // PS NULL GUARD: spectator has no PlayerState
+		localState->deserialize(*ps->playerLocalSettings);
 
 	if(adventureInt)
 		adventureInt->onHeroChanged(nullptr);

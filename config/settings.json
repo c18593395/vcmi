@@ -1,0 +1,11 @@
+{
+  "general": {
+    "playerName": "Agent"
+  },
+  "server": {
+    "ML": {
+      "randomHeroes": 1
+    },
+    "localPort": 4567
+  }
+}

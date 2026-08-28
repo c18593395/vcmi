@@ -276,8 +276,8 @@ set (CMAKE_CXX_STANDARD 20)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
 
 #General visibility options
-set(CMAKE_CXX_VISIBILITY_PRESET hidden)
-set(CMAKE_VISIBILITY_INLINES_HIDDEN 1)
+set(CMAKE_CXX_VISIBILITY_PRESET default)
+set(CMAKE_VISIBILITY_INLINES_HIDDEN 0)
 
 #Global fallback mapping
 # RelWithDebInfo falls back to Release, then MinSizeRel, and then to None (tbb in 22.04 requires it)
@@ -839,9 +839,11 @@ if(NOT TARGET sqlite3::sqlite3)
 		endforeach()
 	endif()
 endif()
-# Final check for sqlite3
+# sqlite3 target — create stub if not found from Conan
 if(NOT TARGET sqlite3::sqlite3)
-	message(FATAL_ERROR "sqlite3::sqlite3 target still not found after all attempts")
+  add_library(sqlite3 SHARED IMPORTED)
+  set_target_properties(sqlite3 PROPERTIES IMPORTED_LOCATION /usr/lib/x86_64-linux-gnu/libsqlite3.so)
+  add_library(sqlite3::sqlite3 ALIAS sqlite3)
 endif()
 
 if(NOT ENABLE_MINIMAL_LIB)

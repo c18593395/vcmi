@@ -196,6 +196,7 @@ void ApplyOnLobbyScreenNetPackVisitor::visitLobbyLoadProgress(LobbyLoadProgress 
 
 void ApplyOnLobbyHandlerNetPackVisitor::visitLobbyUpdateState(LobbyUpdateState & pack)
 {
+	fprintf(stderr, "[ML-DEBUG] lobbyUpdateState(handler) pack.mi=[%s] hostChanged=%d\n", pack.state.mi ? pack.state.mi->fileURI.c_str() : "NULL", pack.hostChanged); fflush(stderr);
 	pack.hostChanged = pack.state.hostClientId != handler.hostClientId;
 	static_cast<LobbyState &>(handler) = pack.state;
 	if(handler.mapToStart && handler.mi)
@@ -207,6 +208,7 @@ void ApplyOnLobbyHandlerNetPackVisitor::visitLobbyUpdateState(LobbyUpdateState &
 
 void ApplyOnLobbyScreenNetPackVisitor::visitLobbyUpdateState(LobbyUpdateState & pack)
 {
+	fprintf(stderr, "[ML-DEBUG] lobbyUpdateState(screen) pack.mi=[%s] lobby=%p\n", pack.state.mi ? pack.state.mi->fileURI.c_str() : "NULL", (void*)lobby); fflush(stderr);
 	if(!lobby) //stub: ignore message for game mode
 		return;
 		

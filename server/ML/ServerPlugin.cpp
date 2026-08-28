@@ -29,11 +29,20 @@
 #include "server/CGameHandler.h"
 #include "server/CVCMIServer.h"
 #include "vstd/RNG.h"
+#include <algorithm>
+#include <array>
+#include <boost/range/numeric.hpp>
+#include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <limits>
 #include <random>
 #include <stdexcept>
 #include <regex>
+
+// C 事件奖励: 战斗结果全局变量 — Python ctypes 从 libmlserverplugin.so 读取
+// 0=无战斗结果, 1=red赢, 2=red输, 3=平局 (endBattleHook 写入, fill 不清零)
+extern "C" { int32_t g_battle_result = 0; }
 
 VCMI_LIB_NAMESPACE_BEGIN
 
@@ -166,34 +175,95 @@ namespace {
      * Format: "hero_<INT>_pool_<STR>"
      * Example: "hero_5123_pool_150k"
      */
-    std::map<std::string, HeroPool> InitHeroPools(CGameState* gs) {
+    HeroPools InitHeroPools(CGameState* gs, const Config& config) {
         auto pattern = std::regex(R"(^hero_\d+_pool_([0-9A-Za-z]+)$)");
-        auto res = std::map<std::string, HeroPool> {};
+        auto res = HeroPools{};
+        int counter = 0;
+
+        // the order in which pools for different players arrive may be different
+        // => use a central lookup table
         int poolid = 0;
+        std::unordered_map<std::string, int> poolids;
 
         for (const auto &heroid : gs->getMap().getHeroesOnMap()) {
-            auto *hero = gs->getHero(heroid);
+            auto * hero = gs->getHero(heroid);
+
+            const auto poolowner = hero->tempOwner.num;
+
+            if (poolowner < 0)
+                // Skip neutral heroes (tempOwner=-1) instead of crashing.
+                // Adventure maps may contain neutral garrisons/heroes that don't belong to any player.
+                continue;
+
             std::string poolname = "default";  // fallback poolname
             std::smatch matches;
+
+            auto & ownedPools = res[poolowner];
 
             // Check if the entire string matches the pattern
             if (std::regex_match(hero->nameCustomTextId, matches, pattern))
                 poolname = matches[1].str();
 
-            if (!res.contains(poolname))
-                res.insert({poolname, HeroPool(poolid++, poolname)});
+            auto it = ownedPools.find(poolname);
+            if (it == ownedPools.end())
+            {
 
-            auto it = res.find(poolname);
-            if (it == res.end()) {
-                res.insert({poolname, HeroPool(poolid++, poolname)});
-                it = res.find(poolname);
+                auto it_id = poolids.find(poolname);
+                if (it_id == poolids.end())
+                    it_id = poolids.try_emplace(poolname, poolid++).first;
+                auto poolid = it_id->second;
+
+                it = ownedPools.emplace(poolname, HeroPool(poolid, poolname)).first;
+                std::cout << "Added pool " << poolid << " of owner " << poolowner << ": " << poolname << "\n";
             }
 
-            auto &pool = it->second;
+            auto& pool = it->second;
             pool.heroes.push_back(hero);
+            ++counter;
         }
 
-        std::cout << "Grouped heroes into " << res.size() << " pools\n";
+        // Phase A: when randomHeroes is enabled, ensure all owners have at least
+        // a "default" pool — even if the map has no heroes for one side.
+        // This prevents the pool-matching check below from failing on adventure maps.
+        if (config.randomHeroes) {
+            int poolid_fallback = poolid;
+            for (const auto & [owner, pools] : res) {
+                if (pools.empty()) {
+                    res[owner].emplace("default", HeroPool(poolid_fallback++, "default"));
+                    std::cout << "randomHeroes: created default pool " << (poolid_fallback-1)
+                              << " for owner " << owner << " (no heroes on map)\n";
+                }
+            }
+        }
+
+        // Phase A: when randomHeroes is enabled, skip pool matching for adventure maps
+        // (the pool concept only applies to battle maps where both sides have identical hero pools)
+        if (!config.randomHeroes) {
+            // Battle maps: require at least 2 players; pool matching only for exactly-2
+            // (training config is 2-player; multi-player maps skip matching — headless GUI validation)
+            if (res.size() < 2) {
+                throw std::runtime_error("Expected at least 2 non-neutral players for non-randomHeroes mode, got " + std::to_string(res.size()));
+            }
+            if (res.size() == 2) {
+                auto it = res.begin();
+                auto & player0 = it->second;
+                auto & player1 = (++it)->second;
+                for (const auto & [name1, pool1] : player0)
+                {
+                    if (player1.find(name1) == player1.end())
+                        throw std::runtime_error("Owners have different pools");
+                    if (pool1.heroes.size() != player1.at(name1).heroes.size())
+                        throw std::runtime_error("Owners have differently sized pools");
+                }
+            }
+        } else {
+            std::cout << "randomHeroes: skipping pool matching check (adventure mode)\n";
+        }
+
+        std::cout << "Grouped " << counter << " heroes into ";
+        for (const auto & [owner, pools] : res)
+            std::cout << "p" << owner << ":" << pools.size() << " ";
+        std::cout << "\n";
         return res;
     }
 
@@ -284,9 +354,14 @@ namespace {
         auto res = std::vector<CreatureID>{};
 
         LIBRARY->creatures()->forEach([&res](const Creature * cr, bool &stop) {
-            // Invalid creatures (arrow towers, war machines, NOT_USED, etc. have lvl=0)
-            if (cr->getLevel() > 0)
+            // Invalid creatures (arrow towers, non-damage war machines, NOT_USED, etc. have growth=0)
+            // We dont those as they cause a game crash when there is no regular creature in the army (instant battle end)
+            // std::cout << "level: " << cr->getLevel() << " " << cr->getNameSingularTextID() << " growth: " << cr->getGrowth() << "\n";
+            if (cr->getGrowth() > 0)
+            {
+                // std::cout << "CREATURE: " << cr->getNamePluralTextID() << "\n";
                 res.push_back(cr->getId());
+            }
         });
 
         return res;
@@ -308,14 +383,14 @@ namespace {
         return res;
     }
 
-    // Just low-tier creatures (levels 1..3)
+    // Just non-shooting low-tier creatures (levels 1..3)
     std::vector<CreatureID> InitGuardingCreatures() {
         auto res = std::vector<CreatureID>{};
 
         LIBRARY->creatures()->forEach([&res](const Creature * cr, bool &stop) {
             // Invalid creatures (arrow towers, war machines, NOT_USED, etc. have lvl=0)
             // "special" creatures (property not exposed, but e.g. ballistas have lvl=4 and growth=0)
-            if (cr->getLevel() > 0 && cr->getGrowth() && cr->getLevel() < 4) {
+            if (cr->getLevel() > 0 && cr->getGrowth() && cr->getLevel() < 4 && cr->getBaseShots() == 0) {
                 // std::cout << "ADDING GUARD: " << cr->getId() << " | " << cr->getGrowth() << " | " << cr->getNameSingularTranslated() << "\n";
                 res.push_back(cr->getId());
             }
@@ -325,7 +400,8 @@ namespace {
     }
 
     std::unique_ptr<Stats> InitStats(CGameState * gs, const Config& config, int npools, int poolsize) {
-        if (config.statsMode == "disabled")
+        // 2026-08-02: statsMode 空串(settings 层不一致: MLClient 写 session 层, Server 读配置层) 等同 disabled
+        if (config.statsMode == "disabled" || config.statsMode == "")
             return nullptr;
 
         if (config.swapSides > 0) {
@@ -348,29 +424,44 @@ ServerPlugin::ServerPlugin(CGameHandler * gh, CGameState * gs, Config & config_)
 : gh(gh)
 , config(config_)
 , alltowns(InitTowns(gs))
-, heropools(InitHeroPools(gs))
+, heropools(InitHeroPools(gs, config_))
 , battleterrains(InitBattleterrains(config.battlefieldPattern))
 , allmachines(InitWarMachines(gs))
 , allcreatures(InitCreatures())
 , allshooters(InitShootingCreatures())
 , allguards(InitGuardingCreatures())
-, stats(InitStats(gs, config, heropools.size(), heropools.begin()->second.heroes.size()))
+, stats(InitStats(gs, config, heropools[0].size(), 2*heropools[0].begin()->second.heroes.size()))
 , rng(std::mt19937(config.rngSeed ? config.rngSeed : gh->getRandomGenerator().nextInt(0, std::numeric_limits<int>::max())))
 , creatureValues(InitCreatureValues())
 {
     // XXX: Take out the first two heroes from the first heropool
-    if (config.leftVipChance > 0 || config.rightVipChance > 0) {
-        auto & p = heropools.begin()->second.heroes;
+    // Only applies to 2-player setups (players 0 and 1 must exist with pools)
+    if (heropools.count(0) && heropools.count(1)
+        && !heropools[0].empty() && !heropools[1].empty())
+    {
+        auto & p1 = heropools[0].begin()->second.heroes;
+        auto & p2 = heropools[1].begin()->second.heroes;
 
-        if (p.size() < 4) {
-            std::cout << "WARNING: VipChance > 0, but there are less than 4 total on this map. Will not enable VIP shooters.\n";
+        if ((config.leftVipChance > 0 || config.rightVipChance > 0) && !config.randomArmies) {
+            std::cout << "WARNING: VipChance > 0, but random armies are not enabled. Will not enable VIP shooters.\n";
+            config.leftVipChance = 0;
+            config.rightVipChance = 0;
+        }
+
+        if (p1.size() < 2 || p2.size() < 2) {
+            std::cout << "WARNING: VipChance > 0, but there are less than 2 total heroes owned by this player on this map. Will not enable VIP shooters.\n";
             config.leftVipChance = 0;
             config.rightVipChance = 0;
         } else {
-            vipHero1 = p[0];
-            vipHero2 = p[1];
+            vipHero1 = p1[0];
+            vipHero2 = p2[0];
 
-            p.erase(p.begin(), p.begin() + 2);
+            nonvipHero1 = p1[1];
+            nonvipHero2 = p2[1];
+
+            // Remove vip heroes from pools so they can't be chosen via randomHeroes
+            p1.erase(p1.begin(), p1.begin() + 2);
+            p2.erase(p2.begin(), p2.begin() + 2);
 
             // Mark heres with "VIP shooter" armies via grail in backpack
             auto grailId = ArtifactID::GRAIL;
@@ -384,14 +475,25 @@ ServerPlugin::ServerPlugin(CGameHandler * gh, CGameState * gs, Config & config_)
                 // gh->putArtifact(artloc, art->getId(), false);
             }
         }
+    } else {
+        if (config.leftVipChance > 0 || config.rightVipChance > 0) {
+            std::cout << "WARNING: VipChance > 0, but not a standard 2-player setup. Disabling VIP.\n";
+            config.leftVipChance = 0;
+            config.rightVipChance = 0;
+        }
     }
 
-
     if (config.randomHeroes > 0) {
-        for (auto &[poolname, pool] : heropools) {
-            // std::cout << "poolname: " << poolname << ", heroes: " << pool.heroes.size() << "\n";
-            if (pool.heroes.size() % 2 != 0) {
-                throw std::runtime_error("An even number of heroes is required in each hero pool.");
+        for (const auto & [owner, pools] : heropools)
+        {
+            for (auto &[poolname, pool] : pools) {
+                // std::cout << "poolname: " << poolname << ", heroes: " << pool.heroes.size() << "\n";
+                if (pool.heroes.size() == 0) {
+                    // Phase A: on adventure maps with randomHeroes, allow empty pools
+                    // (heroes will be assigned later by VCMI's normal selection flow)
+                    std::cout << "randomHeroes: pool '" << poolname << "' for owner " << owner
+                              << " has 0 heroes (adventure map — skipping)\n";
+                }
             }
         }
     }
@@ -476,149 +578,317 @@ void ServerPlugin::handleRandomHeroes(
     if (config.randomHeroes == 0)
         return;
 
-    if (poolcounter % heropools.size() == 0)
+    if (poolcounter % heropools[0].size() == 0)
         poolcounter = 0; // no shuffling for std::map
 
-    auto it = heropools.begin();
-    std::advance(it, poolcounter);
-    auto &pool = it->second;
+    auto it1 = heropools[0].begin();
+    auto it2 = heropools[1].begin();
+    std::advance(it1, poolcounter);
+    std::advance(it2, poolcounter);
+    auto &pool1 = it1->second;
+    auto &pool2 = it2->second;
 
-    if (pool.counter % pool.heroes.size() == 0) {
-        pool.counter = 0;
-        std::shuffle(pool.heroes.begin(), pool.heroes.end(), rng);
-
-        // for (int i=0; i<allheroes.size(); i++)
-        //  printf("allheroes[%d] = %s\n", i, allheroes.at(i)->getNameTextID().c_str());
+    if (pool1.counter % pool1.heroes.size() == 0) {
+        pool1.counter = 0;
+        std::shuffle(pool1.heroes.begin(), pool1.heroes.end(), rng);
     }
+
+    if (pool2.counter % pool2.heroes.size() == 0) {
+        pool2.counter = 0;
+        std::shuffle(pool2.heroes.begin(), pool2.heroes.end(), rng);
+    }
+
     // printf("poolcounter = %d\n", poolcounter);
 
-    // XXX: heroes must be different (objects must have different tempOwner)
     // modification by reference
-    hero1 = pool.heroes.at(pool.counter);
-    hero2 = pool.heroes.at(pool.counter+1);
+    hero1 = pool1.heroes.at(pool1.counter);
+    hero2 = pool2.heroes.at(pool2.counter);
 
     // printf("Pool: %s, hero0: %s, hero1: %s\n", pool.name.c_str(), hero1->nameCustomTextId.c_str(), hero2->nameCustomTextId.c_str());
 
     if (battlecounter % config.randomHeroes == 0) {
         poolcounter += 1;
-        pool.counter += 2;
+        pool1.counter += 1;
+        pool2.counter += 1;
     }
 
     // modification by reference
     army1 = hero1->getArmy();
     army2 = hero2->getArmy();
     // std::cout << "Pool: " << it->first << ", " << hero1->nameCustomTextId << " vs. " << hero2->nameCustomTextId << "\n";
+
+    // Store as nonvip heroes
+    nonvipHero1 = hero1;
+    nonvipHero2 = hero2;
+
 }
 
-void ServerPlugin::_setVipArmy(
-    CGHeroInstance * heroA,
-    CGHeroInstance * heroB
-) {
-    auto dist100 = std::uniform_int_distribution<>(0, 99);
-    auto distShooterCreatures = std::uniform_int_distribution<>(0, allshooters.size() - 1);
-    auto distGuardingCreatures = std::uniform_int_distribution<>(0, allguards.size() - 1);
-    auto distGuardStacks = std::uniform_int_distribution<>(3, 6);
-    auto distStrength = std::uniform_real_distribution<float>(0.5, 1.5);
-    auto distSlot = std::uniform_int_distribution<>(0, 6);
-
-    const auto *guard = allguards.at(distGuardingCreatures(rng)).toCreature();
-    const auto *shooter = allshooters.at(distShooterCreatures(rng)).toCreature();
-    auto shooterslot = SlotID(distSlot(rng));
-
-    auto totalValue = 0;
-    auto guardsToAdd = distGuardStacks(rng);
-    auto guardsAdded = 0;
-
-    for (int i = 0; i < 7; ++i) {
-        auto islot = SlotID(i);
-
-        // (A) Erase all stacks
-        if (heroA->hasStackAtSlot(islot))
-            gh->eraseStack(StackLocation(heroA->id, islot), true);
-
-        // (A) Insert guards at non-shooter slots
-        if (islot != shooterslot && guardsAdded < guardsToAdd){
-            gh->insertNewStack(StackLocation(heroA->id, islot), guard, 1);
-            ++guardsAdded;
-        }
-
-        // (B) Calculate value of all stacks
-        if (heroB->hasStackAtSlot(islot)) {
-            const auto & cstack = heroB->getStack(islot);
-            totalValue += creatureValues.at(cstack.getCreatureID()) * cstack.getCount();
-        }
-    }
-
-    int shooterQty = distStrength(rng) * (totalValue / creatureValues.at(shooter->getId()));
-    if (shooterQty == 0)
-        shooterQty = 1;
-
-    // Insert shooter stack
-    gh->insertNewStack(StackLocation(heroA->id, SlotID(shooterslot)), shooter, shooterQty);
-}
-
-void ServerPlugin::handleVips(
+void ServerPlugin::handleRandomArmies(
     const CArmedInstance *&army1,
     const CArmedInstance *&army2,
     const CGHeroInstance *&hero1,
     const CGHeroInstance *&hero2
 ) {
-    auto dist100 = std::uniform_int_distribution<>(0, 99);
+    if (!config.randomArmies)
+        return;
 
-    if (dist100(rng) < config.leftVipChance) {
+    if ((config.randomArmyValueMin < 500) || (config.randomArmyValueMax < config.randomArmyValueMin) || (config.randomArmyTargetVar < 0) || (config.randomArmyTargetVar > 100))
+        throw std::runtime_error("invalid randomArmy config given");
+
+    if(allcreatures.empty())
+        throw std::runtime_error("cannot generate random armies without valid creatures");
+
+    if((config.leftVipChance > 0 || config.rightVipChance > 0) && (allshooters.empty() || allguards.empty()))
+        throw std::runtime_error("cannot generate VIP random armies without shooter and guard creatures");
+
+    struct GeneratedStack
+    {
+        SlotID slot;
+        const CCreature * creature;
+        int quantity;
+    };
+
+    auto divCeil = [](int value, int divisor) -> int
+    {
+        return (value + divisor - 1) / divisor;
+    };
+
+    auto totalArmyValue = [this](const std::vector<GeneratedStack> & generated) -> int
+    {
+        return boost::accumulate(generated, 0, [&](int sum, const auto & stack) {
+            return sum + (creatureValues.at(stack.creature->getId()) * stack.quantity);
+        });
+    };
+
+    auto var = static_cast<double>(config.randomArmyTargetVar) / 100;
+
+    auto generateArmyWithStackCount = [this, &divCeil, &var](
+        int targetValue,
+        const std::vector<CreatureID> & creaturePool,
+        int desiredStackCount
+    ) -> std::vector<GeneratedStack>
+    {
+        const int minTotalValue = static_cast<int>(std::ceil(targetValue * (1 - var)));
+        const int maxTotalValue = static_cast<int>(std::floor(targetValue * (1 + var)));
+        const auto cheapestCreature = std::ranges::min_element(creaturePool, [this](const CreatureID & left, const CreatureID & right)
+        {
+            return creatureValues.at(left) < creatureValues.at(right);
+        });
+        const int cheapestValue = creatureValues.at(*cheapestCreature);
+
+        for(int attempt = 0; attempt < 1000; ++attempt)
+        {
+            std::array<int, 7> slots = { 0, 1, 2, 3, 4, 5, 6 };
+            std::shuffle(slots.begin(), slots.end(), rng);
+
+            int totalValue = 0;
+            std::vector<GeneratedStack> generated;
+
+            for(int stackIndex = 0; stackIndex < desiredStackCount; ++stackIndex)
+            {
+                const int remainingSlotsAfterThis = desiredStackCount - stackIndex - 1;
+                const int remainingMaxValue = maxTotalValue - totalValue;
+                const int reservedValueForLaterSlots = cheapestValue * remainingSlotsAfterThis;
+                if(remainingMaxValue <= reservedValueForLaterSlots)
+                    break;
+
+                const bool isLastStack = remainingSlotsAfterThis == 0;
+                std::vector<const CCreature *> candidates;
+                for(const auto & creatureId : creaturePool)
+                {
+                    const auto value = creatureValues.at(creatureId);
+                    if(value <= 0 || value + reservedValueForLaterSlots > remainingMaxValue)
+                        continue;
+
+                    if(isLastStack)
+                    {
+                        const int requiredQuantity = divCeil(minTotalValue - totalValue, value);
+                        if(requiredQuantity * value > remainingMaxValue)
+                            continue;
+                    }
+
+                    candidates.push_back(creatureId.toCreature());
+                }
+
+                if(candidates.empty())
+                    break;
+
+                const auto * creature = candidates.at(std::uniform_int_distribution<>(0, static_cast<int>(candidates.size()) - 1)(rng));
+                const int creatureValue = creatureValues.at(creature->getId());
+                int maxQuantity = (remainingMaxValue - reservedValueForLaterSlots) / creatureValue;
+                const int minQuantity = isLastStack
+                    ? std::max(1, divCeil(minTotalValue - totalValue, creatureValue))
+                    : 1;
+
+                if(!isLastStack)
+                {
+                    const int valueBudgetForThisStack = divCeil(targetValue - totalValue, desiredStackCount - stackIndex);
+                    const int quantityBudgetForThisStack = std::max(1, divCeil(valueBudgetForThisStack * 2, creatureValue));
+                    maxQuantity = std::min(maxQuantity, quantityBudgetForThisStack);
+                }
+
+                if(minQuantity > maxQuantity)
+                    break;
+
+                const int quantity = std::uniform_int_distribution<>(minQuantity, maxQuantity)(rng);
+                generated.push_back({ SlotID(slots.at(stackIndex)), creature, quantity });
+                totalValue += creatureValue * quantity;
+            }
+
+            if(generated.size() == desiredStackCount && totalValue >= minTotalValue && totalValue <= maxTotalValue)
+                return generated;
+        }
+
+        return {};
+    };
+
+    auto generateArmy = [this, &divCeil, &generateArmyWithStackCount](int targetValue) -> std::vector<GeneratedStack>
+    {
+        for(int attempt = 0; attempt < 100; ++attempt)
+        {
+            // Bias towards fuller armies while still allowing sparse ones sometimes.
+            auto distSlotCount = std::uniform_int_distribution<>(1, 7);
+            const int desiredStackCount = std::max(distSlotCount(rng), distSlotCount(rng));
+            auto generated = generateArmyWithStackCount(targetValue, allcreatures, desiredStackCount);
+            if(!generated.empty())
+                return generated;
+        }
+
+        const auto cheapestCreature = std::ranges::min_element(allcreatures, [this](const CreatureID & left, const CreatureID & right)
+        {
+            return creatureValues.at(left) < creatureValues.at(right);
+        });
+        const auto * creature = cheapestCreature->toCreature();
+        const int creatureValue = creatureValues.at(creature->getId());
+        const int quantity = std::max(1, divCeil(targetValue, creatureValue));
+        return { { SlotID(0), creature, quantity } };
+    };
+
+    auto generateVipArmy = [this, &divCeil, &var, &totalArmyValue, &generateArmyWithStackCount](int targetValue) -> std::vector<GeneratedStack>
+    {
+        const int minTotalValue = static_cast<int>(std::ceil(targetValue * (1 - var)));
+        const int maxTotalValue = static_cast<int>(std::floor(targetValue * (1 + var)));
+
+        const auto cheapestGuard = std::ranges::min_element(allguards, [this](const CreatureID & left, const CreatureID & right)
+        {
+            return creatureValues.at(left) < creatureValues.at(right);
+        });
+        const int cheapestGuardValue = creatureValues.at(*cheapestGuard);
+
+        for(int attempt = 0; attempt < 1000; ++attempt)
+        {
+            const int desiredStackCount = std::uniform_int_distribution<>(4, 7)(rng);
+            const int guardStackCount = desiredStackCount - 1;
+            const int minGuardValue = cheapestGuardValue * guardStackCount;
+            const int maxGuardValue = (maxTotalValue * 7) / 10;
+
+            if(minGuardValue > maxGuardValue)
+                continue;
+
+            const int guardTarget = std::uniform_int_distribution<>(minGuardValue, maxGuardValue)(rng);
+            auto generated = generateArmyWithStackCount(guardTarget, allguards, guardStackCount);
+            if(generated.empty())
+                continue;
+
+            const int guardValue = totalArmyValue(generated);
+            const int minShooterValue = std::max({ 1, minTotalValue - guardValue, divCeil(guardValue * 3, 7) });
+            const int maxShooterValue = maxTotalValue - guardValue;
+            if(minShooterValue > maxShooterValue)
+                continue;
+
+            struct ShooterCandidate
+            {
+                const CCreature * creature;
+                int minQuantity;
+                int maxQuantity;
+            };
+
+            std::vector<ShooterCandidate> shooters;
+            for(const auto & shooterId : allshooters)
+            {
+                const int shooterValue = creatureValues.at(shooterId);
+                const int minQuantity = std::max(1, divCeil(minShooterValue, shooterValue));
+                const int maxQuantity = maxShooterValue / shooterValue;
+                if(minQuantity <= maxQuantity)
+                    shooters.push_back({ shooterId.toCreature(), minQuantity, maxQuantity });
+            }
+
+            if(shooters.empty())
+                continue;
+
+            const auto & shooter = shooters.at(std::uniform_int_distribution<>(0, static_cast<int>(shooters.size()) - 1)(rng));
+            const int shooterQuantity = std::uniform_int_distribution<>(shooter.minQuantity, shooter.maxQuantity)(rng);
+            const int shooterValue = creatureValues.at(shooter.creature->getId()) * shooterQuantity;
+
+            std::array<bool, 7> occupied = { false, false, false, false, false, false, false };
+            for(const auto & stack : generated)
+                occupied.at(static_cast<int>(stack.slot)) = true;
+
+            std::vector<int> freeSlots;
+            for(int slot = 0; slot < 7; ++slot)
+                if(!occupied.at(slot))
+                    freeSlots.push_back(slot);
+
+            const int shooterSlot = freeSlots.at(std::uniform_int_distribution<>(0, static_cast<int>(freeSlots.size()) - 1)(rng));
+            generated.push_back({ SlotID(shooterSlot), shooter.creature, shooterQuantity });
+
+            const int totalValue = guardValue + shooterValue;
+            if(totalValue >= minTotalValue && totalValue <= maxTotalValue && shooterValue * 10 >= totalValue * 3)
+                return generated;
+        }
+
+        throw std::runtime_error("failed to generate VIP random army with the current randomArmy config");
+    };
+
+    const int target = std::uniform_int_distribution<>(config.randomArmyValueMin, config.randomArmyValueMax)(rng);
+    auto dist100 = std::uniform_int_distribution<>(0, 99);
+    const bool leftVip = vipHero1 && (dist100(rng) < config.leftVipChance);
+    const bool rightVip = vipHero2 && (dist100(rng) < config.rightVipChance);
+
+    if(leftVip)
+    {
+        // std::cout << "RED VIP: TRIGGER\n";
         // XXX: heroes must be different (objects must have different tempOwner)
         // modification by reference
         hero1 = vipHero1;
         army1 = hero1->getArmy();
-        _setVipArmy(const_cast<CGHeroInstance*>(hero1), const_cast<CGHeroInstance*>(hero2));
+    }
+    else
+    {
+        // std::cout << "RED VIP: SKIP\n";
+        hero1 = nonvipHero1;
+        army1 = nonvipHero1->getArmy();
     }
 
-    if (dist100(rng) < config.rightVipChance) {
+    if(rightVip)
+    {
+        // std::cout << "BLUE VIP: TRIGGER " << config.rightVipChance << "\n";
         hero2 = vipHero2;
         army2 = hero2->getArmy();
-        _setVipArmy(const_cast<CGHeroInstance*>(hero2), const_cast<CGHeroInstance*>(hero1));
+    }
+    else
+    {
+        // std::cout << "BLUE VIP: SKIP " << config.rightVipChance << "\n";
+        hero2 = nonvipHero2;
+        army2 = nonvipHero2->getArmy();
     }
 
-}
+    auto replaceArmy = [this, &target, &generateArmy, &generateVipArmy](const CGHeroInstance * hero, bool vip)
+    {
+        const auto generated = vip ? generateVipArmy(target) : generateArmy(target);
 
-void ServerPlugin::handleRandomStacks(const CGHeroInstance * hero1, const CGHeroInstance * hero2) {
-    auto dist100 = std::uniform_int_distribution<>(0, 99);
-    auto distCreatures = std::uniform_int_distribution<>(0, allcreatures.size() - 1);
-    auto distQuantity = std::uniform_int_distribution<>(0, 1000);
+        for(int slot = 0; slot < 7; ++slot)
+            if(hero->hasStackAtSlot(SlotID(slot)))
+                gh->eraseStack(StackLocation(hero->id, SlotID(slot)), true);
 
-    auto maybeAddStack = [this, &dist100, &distQuantity, &distCreatures](const CGHeroInstance *hero, int slot) {
-        if (hero->hasStackAtSlot(SlotID(slot))) {
-            if (hero->stacksCount() == 1)
-                return;
-
-            // Roll whether to remove existing stack
-            if (dist100(rng) >= config.randomStackChance)
-                return;
-
-            // gh->giveHeroNewArtifact(hero, )
-            gh->eraseStack(StackLocation(hero->id, SlotID(slot)));
-        }
-
-        // Roll whether to add a new stack
-        if (dist100(rng) >= config.randomStackChance)
-            return;
-
-        const auto * cr = allcreatures.at(distCreatures(rng)).toCreature();
-        auto qty = distQuantity(rng);
-        // Crude guard against absurd stacks such as 1K azure dragons
-        qty = std::max(1, qty / cr->getLevel());
-        // printf("Adding %d %s to slot %d for hero %s\n", qty, cr->getNamePluralTranslated().c_str(), slot, hero->nameCustomTextId.c_str());
-        gh->insertNewStack(StackLocation(hero->id, SlotID(slot)), cr, qty);
+        for(const auto & stack : generated)
+            gh->insertNewStack(StackLocation(hero->id, stack.slot), stack.creature, stack.quantity);
     };
 
-    // Don't add stacks to VIP armies
-    if (hero1 != vipHero1)
-        for (int i=0; i<7; ++i)
-            maybeAddStack(hero1, i);
+    // std::cout << "=================================\n";
 
-    if (hero2 != vipHero2)
-        for (int i=0; i<7; ++i)
-            maybeAddStack(hero2, i);
+    replaceArmy(hero1, leftVip);
+    replaceArmy(hero2, rightVip);
 }
 
 void ServerPlugin::handleWarmachines(const CGHeroInstance * hero1, const CGHeroInstance * hero2) {
@@ -685,26 +955,43 @@ void ServerPlugin::handleSwapSides(const CGHeroInstance * hero1, const CGHeroIns
     const_cast<CGHeroInstance*>(hero2)->tempOwner = PlayerColor(!redside);
 }
 
+void ServerPlugin::handleRandomPrimarySkills(const CGHeroInstance * hero1, const CGHeroInstance * hero2) {
+    if(config.randomPrimarySkills == 0)
+        return;
+
+    auto dist = std::uniform_int_distribution<>(0, config.randomPrimarySkills);
+    gh->changePrimSkill(hero1, PrimarySkill::ATTACK, dist(rng), ChangeValueMode::ABSOLUTE);
+    gh->changePrimSkill(hero1, PrimarySkill::DEFENSE, dist(rng), ChangeValueMode::ABSOLUTE);
+    gh->changePrimSkill(hero2, PrimarySkill::ATTACK, dist(rng), ChangeValueMode::ABSOLUTE);
+    gh->changePrimSkill(hero2, PrimarySkill::DEFENSE, dist(rng), ChangeValueMode::ABSOLUTE);
+}
+
+void ServerPlugin::handleRandomSecondarySkills(const CGHeroInstance * hero1, const CGHeroInstance * hero2) {
+    auto dist = std::uniform_int_distribution<>(MasteryLevel::NONE, MasteryLevel::EXPERT);
+    gh->changeSecSkill(hero1, SecondarySkill::BALLISTICS, dist(rng), ChangeValueMode::ABSOLUTE);
+    gh->changeSecSkill(hero2, SecondarySkill::BALLISTICS, dist(rng), ChangeValueMode::ABSOLUTE);
+    gh->changeSecSkill(hero1, SecondarySkill::ARTILLERY, dist(rng), ChangeValueMode::ABSOLUTE);
+    gh->changeSecSkill(hero2, SecondarySkill::ARTILLERY, dist(rng), ChangeValueMode::ABSOLUTE);
+}
+
 void ServerPlugin::startBattleHook(
     const CArmedInstance *&army1,
     const CArmedInstance *&army2,
     const CGHeroInstance *&hero1,
     const CGHeroInstance *&hero2
 ) {
+    // Hero vs monster (hero2=null): skip ML battle init, VCMI handles via autofight
     if (!(hero1 && hero2))
-        throw std::runtime_error("Both hero1 and hero2 are required");
+        return;
 
     battlecounter++;
-
-    // printf("config.randomHeroes = %d\n", config.randomHeroes);
-
     handleRandomHeroes(army1, army2, hero1, hero2);
-    handleVips(army1, army2, hero1, hero2);
-    handleRandomStacks(hero1, hero2);
+    handleRandomArmies(army1, army2, hero1, hero2);
     handleWarmachines(hero1, hero2);
     handleTightFormation(hero1, hero2);
     handleMinMaxMana(hero1, hero2);
-    handleSwapSides(hero1, hero2);
+    handleRandomPrimarySkills(hero1, hero2);
+    handleRandomSecondarySkills(hero1, hero2);
 }
 
 void ServerPlugin::endBattleHook(
@@ -712,7 +999,28 @@ void ServerPlugin::endBattleHook(
     const CGHeroInstance * heroAttacker,
     const CGHeroInstance * heroDefender
 ) {
+    // C 事件奖励: 战斗结果写入 g_battle_result (Python ctypes 读取)
+    // 0=无战斗结果, 1=red赢, 2=red输, 3=平局
+    // 无论 heroDefender 是否为空都写 (打野战斗也要记录); ESCAPE/SURRENDER 不算胜负 → 0
+    g_battle_result = 0;
+    if (br && br->result == EBattleResult::NORMAL) {
+        bool attackerIsRed = (heroAttacker && heroAttacker->getOwner() == PlayerColor(0));
+        int w = static_cast<int>(br->winner);  // BattleSide: 0=attacker 1=defender (draw 时 NONE=-1)
+        if (w == 0)      g_battle_result = attackerIsRed ? 1 : 2;  // attacker 赢
+        else if (w == 1) g_battle_result = attackerIsRed ? 2 : 1;  // defender 赢
+        else             g_battle_result = 3;                       // draw
+    }
+
+    // Hero vs monster: skip stats (no heroName available)
+    if (!heroDefender)
+        return;
+
+    // if (br->result == EBattleResult::NORMAL) // ESCAPE=1 SURRENDER=2
+    //     // left=0, right=1, draw=2, none=-1
+    //     std::cout << static_cast<int>(br->winner) << "\n" << std::flush;
+
     // don't record stats for retreats (i.e. env resets)
+    // XXX: stats not updated with owner-based hero pools
     if (stats && br->result == EBattleResult::NORMAL) {
         auto extractHeroID = [](const std::string& name) {
             std::regex pattern(R"(^hero_(\d+)_pool_([0-9A-Za-z]+)$)");
@@ -741,11 +1049,23 @@ void ServerPlugin::endBattleHook(
         if (poolname != poolname2)
             throw std::runtime_error("Pools do not match: " + poolname + " <> " + poolname2);
 
-        auto it = heropools.find(poolname);
-        if (it == heropools.end())
-            throw std::runtime_error("Could not pool with name: " + poolname);
+        if(heroAttacker->tempOwner == heroDefender->tempOwner)
+            throw std::runtime_error("temp owners must differ");
 
-        auto poolid = it->second.id;
+        auto itAttacker = heropools[heroAttacker->tempOwner].find(poolname);
+        if (itAttacker == heropools[heroAttacker->tempOwner].end())
+            throw std::runtime_error("Could not find attacker pool with name: " + poolname);
+
+        auto itDefender = heropools[heroDefender->tempOwner].find(poolname);
+        if (itDefender == heropools[heroDefender->tempOwner].end())
+            throw std::runtime_error("Could not find defender pool with name: " + poolname);
+
+        if (itAttacker->second.id != itDefender->second.id)
+            throw std::runtime_error("Attacker and defender pools are different: " + std::to_string(itAttacker->second.id) + "/" + itAttacker->second.name + " <> " + std::to_string(itDefender->second.id) + "/" + itDefender->second.name);
+
+        auto poolid = itAttacker->second.id;
+
+        // XXX: stats not updated with owner-based hero pools
         auto statside = (config.statsMode == "red") ? redside : !redside;
         auto victory = br->winner == BattleSide(statside);
         stats->dataadd(victory, poolid, attackerID, defenderID);

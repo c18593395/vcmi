@@ -276,7 +276,7 @@ void ScalableImageShared::draw(SDL_Surface * where, const Point & dest, const Re
 	bool bodyLoading = scaled.at(scalingFactor).body.at(0) && scaled.at(scalingFactor).body.at(0)->isLoading();
 	bool overlayLoading = scaled.at(scalingFactor).overlay.at(0) && scaled.at(scalingFactor).overlay.at(0)->isLoading();
 	bool grayscaleLoading = scaled.at(scalingFactor).bodyGrayscale.at(0) && scaled.at(scalingFactor).bodyGrayscale.at(0)->isLoading();
-	bool playerLoading = parameters.player != PlayerColor::CANNOT_DETERMINE && scaled.at(scalingFactor).playerColored.at(1+parameters.player.getNum()) && scaled.at(scalingFactor).playerColored.at(1+parameters.player.getNum())->isLoading();
+	bool playerLoading = parameters.player.isValidPlayer() && parameters.player != PlayerColor::CANNOT_DETERMINE && scaled.at(scalingFactor).playerColored.at(1+parameters.player.getNum()) && scaled.at(scalingFactor).playerColored.at(1+parameters.player.getNum())->isLoading();
 
 	if (shadowLoading || bodyLoading || overlayLoading || playerLoading || grayscaleLoading)
 	{
@@ -290,7 +290,7 @@ void ScalableImageShared::draw(SDL_Surface * where, const Point & dest, const Re
 	if (scaled.at(scalingFactor).shadow.at(0))
 		getFlippedImage(scaled.at(scalingFactor).shadow)->draw(where, parameters.palette, dest, src, Colors::WHITE_TRUE, parameters.alphaValue, locator.layer);
 
-	if (parameters.player != PlayerColor::CANNOT_DETERMINE && scaled.at(scalingFactor).playerColored.at(1+parameters.player.getNum()))
+	if (parameters.player.isValidPlayer() && parameters.player != PlayerColor::CANNOT_DETERMINE && scaled.at(scalingFactor).playerColored.at(1+parameters.player.getNum()))
 	{
 		scaled.at(scalingFactor).playerColored.at(1+parameters.player.getNum())->draw(where, parameters.palette, dest, src, Colors::WHITE_TRUE, parameters.alphaValue, locator.layer);
 	}

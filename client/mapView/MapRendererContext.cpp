@@ -96,7 +96,11 @@ int MapRendererBaseContext::attackedMonsterDirection(const CGObjectInstance * wa
 		
 	for(const auto & battle : GAME->interface()->cb->getActiveBattles())
 		if(wanderingMonster->pos == battle.second->getBattle()->getLocation())
-			return battle.second->getBattle()->getSideHero(BattleSide::ATTACKER)->moveDir;
+		{
+			const auto * attacker = battle.second->getBattle()->getSideHero(BattleSide::ATTACKER);
+			if(attacker) // NULL GUARD: side hero may be absent in spectator/edge battles
+				return attacker->moveDir;
+		}
 
 	return -1;
 }

@@ -304,6 +304,7 @@ bool CVCMIServer::prepareToStartGame()
 			logNetwork->info("Preparing to start new game");
 			si->startTime = std::time(nullptr);
 			si->fileURI = mi->fileURI;
+			fprintf(stderr, "[SRV-DIAG] NEW_GAME start: mi.fileURI=[%s] si->fileURI=[%s] si->mapname=[%s]\n", mi ? mi->fileURI.c_str() : "NULL", si->fileURI.c_str(), si->mapname.c_str()); fflush(stderr);
 			newGH->init(si.get(), progressTracking);	// may throw
 			started = true;
 			break;
@@ -630,6 +631,7 @@ void CVCMIServer::updateStartInfoOnMapChange(std::shared_ptr<CMapInfo> mapInfo, 
 	}
 
 	si->mapname = mi->fileURI;
+	fprintf(stderr, "[SRV-DIAG] updateStartInfoOnMapChange mi.fileURI=[%s] si->mapname=[%s] si->fileURI=[%s]\n", mi->fileURI.c_str(), si->mapname.c_str(), si->fileURI.c_str()); fflush(stderr);
 }
 
 void CVCMIServer::updateAndPropagateLobbyState()

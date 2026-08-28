@@ -353,7 +353,7 @@ int main(int argc, char * argv[])
 	if(vm.count("testmap"))
 	{
 		session["testmap"].String() = vm["testmap"].as<std::string>();
-		session["onlyai"].Bool() = true;
+		session["onlyai"].Bool() = getenv("VCMI_TESTMAP_ONLYAI") ? std::atoi(getenv("VCMI_TESTMAP_ONLYAI")) : true;
 		GAME->server().debugStartTest(session["testmap"].String(), false);
 	}
 	else if(vm.count("testsave"))

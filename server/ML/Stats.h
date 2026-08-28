@@ -20,11 +20,8 @@
 #include <unordered_map>
 #include <vector>
 #include <map>
-#include "StdInc.h"
-
-#ifndef WITHOUT_SQLITE3
 #include <sqlite3.h>
-#endif
+#include "StdInc.h"
 
 VCMI_LIB_NAMESPACE_BEGIN
 
@@ -51,7 +48,6 @@ namespace ML {
         void dbupdate(); // add buffers data to DB
         void dataadd(bool victory, int pool, int heroL, int heroR);
     private:
-#ifndef WITHOUT_SQLITE3
         std::unordered_map<std::tuple<int, int, int>, std::tuple<int, int>, TupleHash> buffer;
         void withinTransaction(sqlite3* db, bool commit, std::function<void()> func);
         const std::string dbpath;
@@ -60,7 +56,6 @@ namespace ML {
         const int timeout;
         int persistcounter;
         void verify(int side, int npools, int poolsize);
-#endif
     };
 }
 

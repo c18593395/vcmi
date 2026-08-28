@@ -85,7 +85,9 @@ namespace
 		else
 		{
 			logAi->error("Could not load MMAI config. Is MMAI mod enabled?");
-			fallback = "BattleAI";
+			// ML fix (2026-08-16): config 缺失时 fallback 用 StupidAI — BattleAI 在 headless
+			// 无头服务器下等待回调卡死 (MLClient.cpp 注释早有记录), StupidAI 是验证过的自动裁决
+			fallback = "StupidAI";
 		}
 
 		logAi->debug("MMAI: repo initialized with fallback: %s", fallback);
@@ -330,11 +332,24 @@ void Router::battleStart(
 	bool replayAllowed
 )
 {
+	// ML fix (C8.5): 整体防御 — neutral 玩家 playerID 无效导致 ASSERT 抛异常 → std::unexpected 崩溃
+	try {
 	MMAI_LOG_TAG;
 	Schema::IModel * model;
 	bool allowMlBot = false;
 
 	std::string modelkey = side == BattleSide::ATTACKER ? "attacker" : "defender";
+
+	// ML fix (2026-08-16): neutral/无 playerID 战斗 (red 打野) — 直接 StupidAI 自动裁决。
+	// 原 C8.5 方案用 baggage->modelRight (blue 模型), blue=Nullkiller2 时加载 Nullkiller2
+	// 战斗模型失败 → fallback BattleAI → headless 卡死。StupidAI 是无头环境验证过的自动裁决。
+	if (baggage && (!cb->getPlayerID() || !cb->getPlayerID()->hasValue()))
+	{
+		bai = CDynLibHandler::getNewBattleAI("StupidAI");
+		bai->initBattleInterface(env, cb, aiCombatOptions);
+		bai->battleStart(bid, army1, army2, tile, hero1, hero2, side, replayAllowed);
+		return;
+	}
 
 	if(baggage)
 	{
@@ -344,13 +359,19 @@ void Router::battleStart(
 		// to accomodate for the "side swapping" training feature.
 		// XXX: dev mode assumes there are no neutral players in battle
 		ASSERT(baggage, "baggage is nullptr");
-		ASSERT(cb->getPlayerID()->hasValue(), "cb->getPlayerID() has no value");
-		if (cb->getPlayerID()->num) {
+		auto pid = cb->getPlayerID();
+		if (pid && pid->hasValue()) {
+			if (pid->num) {
+				model = baggage->modelRight;
+				allowMlBot = baggage->allowMlBotRight;
+			} else {
+				model = baggage->modelLeft;
+				allowMlBot = baggage->allowMlBotLeft;
+			}
+		} else {
+			// ML fix (C8.5): neutral/无 playerID 玩家 — 用 defender 模型, 避免 ASSERT 崩溃
 			model = baggage->modelRight;
 			allowMlBot = baggage->allowMlBotRight;
-		} else {
-			model = baggage->modelLeft;
-			allowMlBot = baggage->allowMlBotLeft;
 		}
 		ASSERT(model, "model is nullptr");
 		if(model->getType() == Schema::ModelType::PATH)
@@ -404,7 +425,11 @@ void Router::battleStart(
 #endif
 			else
 			{
-				THROW_FORMAT("Unexpected scripted model name: %s", model->getName());
+				// ML fix: 未知 scripted 模型名 (如 blue=Nullkiller2 时 Scripted("Nullkiller2"))
+				// fallback StupidAI 自动裁决 (BattleAI headless 卡死, 勿用)
+				logAi->warn("Unknown scripted model name: %s — falling back to StupidAI", model->getName());
+				bai = CDynLibHandler::getNewBattleAI("StupidAI");
+				bai->initBattleInterface(env, cb, aiCombatOptions);
 			}
 			break;
 		case Schema::ModelType::NN:
@@ -424,6 +449,27 @@ void Router::battleStart(
 	}
 
 	bai->battleStart(bid, army1, army2, tile, hero1, hero2, side, replayAllowed);
+	} catch (const std::exception & e) {
+		fprintf(stderr, "[Router] battleStart exception: %s — fallback to StupidAI\n", e.what());
+		try {
+			bai = CDynLibHandler::getNewBattleAI("StupidAI");
+			bai->initBattleInterface(env, cb, aiCombatOptions);
+			bai->battleStart(bid, army1, army2, tile, hero1, hero2, side, replayAllowed);
+		} catch (...) {
+			fprintf(stderr, "[Router] battleStart fallback also failed\n");
+			bai = nullptr;
+		}
+	} catch (...) {
+		fprintf(stderr, "[Router] battleStart unknown exception — fallback to StupidAI\n");
+		try {
+			bai = CDynLibHandler::getNewBattleAI("StupidAI");
+			bai->initBattleInterface(env, cb, aiCombatOptions);
+			bai->battleStart(bid, army1, army2, tile, hero1, hero2, side, replayAllowed);
+		} catch (...) {
+			fprintf(stderr, "[Router] battleStart fallback also failed\n");
+			bai = nullptr;
+		}
+	}
 }
 
 void Router::battleTriggerEffect(const BattleID & bid, const BattleTriggerEffect & bte)

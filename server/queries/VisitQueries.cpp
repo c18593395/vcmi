@@ -34,6 +34,7 @@ bool VisitQuery::blocksPack(const CPackForServer * pack) const
 
 void MapObjectVisitQuery::onExposure(QueryPtr topQuery)
 {
+	fprintf(stderr, "[ML-q] MapObjectVisitQuery::onExposure ENTER obj=%s\n", gh->gameState().getObjInstance(visitedObject) ? "exists" : "gone");
 	auto object = gh->gameState().getObjInstance(visitedObject);
 	auto hero = gh->gameState().getHero(visitingHero);
 

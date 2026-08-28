@@ -595,7 +595,12 @@
 				"seed" : {
 					"type" : "number",
 					"default" : 0
-				}
+				},
+			"ML" : {
+				"type" : "object",
+				"additionalProperties" : true,
+				"default" : {}
+			},
 			}
 		},
 		"ai" : {

@@ -143,6 +143,7 @@ void BattleProcessor::startBattle(const CArmedInstance *army1, const CArmedInsta
 	}
 
 	flowProcessor->onBattleStarted(*battle);
+	fprintf(stderr, "[ML-battle] BattleProcessor::startBattle DONE\n");
 }
 
 void BattleProcessor::startBattle(const CArmedInstance *army1, const CArmedInstance *army2)

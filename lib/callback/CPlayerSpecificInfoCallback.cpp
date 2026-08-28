@@ -49,6 +49,8 @@ std::vector < const CGTownInstance *> CPlayerSpecificInfoCallback::getTownsInfo(
 std::vector < const CGHeroInstance *> CPlayerSpecificInfoCallback::getHeroesInfo() const
 {
 	const auto * playerState = gameState().getPlayerState(*getPlayerID());
+	if(!playerState) // PS NULL GUARD: spectator (player invalid) has no PlayerState
+		return {};
 	return playerState->getHeroes();
 }
 
@@ -91,12 +93,18 @@ int3 CPlayerSpecificInfoCallback::getGrailPos( double *outKnownRatio )
 
 std::vector < const CGObjectInstance * > CPlayerSpecificInfoCallback::getMyObjects() const
 {
-	return gameState().getPlayerState(*getPlayerID())->getOwnedObjects();
+	const auto * playerState = gameState().getPlayerState(*getPlayerID());
+	if(!playerState) // PS NULL GUARD
+		return {};
+	return playerState->getOwnedObjects();
 }
 
 std::vector <QuestInfo> CPlayerSpecificInfoCallback::getMyQuests() const
 {
-	return gameState().getPlayerState(*getPlayerID())->quests;
+	const auto * playerState = gameState().getPlayerState(*getPlayerID());
+	if(!playerState) // PS NULL GUARD
+		return {};
+	return playerState->quests;
 }
 
 int CPlayerSpecificInfoCallback::howManyHeroes(bool includeGarrisoned) const

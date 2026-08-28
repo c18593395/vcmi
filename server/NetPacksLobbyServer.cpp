@@ -134,6 +134,7 @@ void ApplyOnServerAfterAnnounceNetPackVisitor::visitLobbyQuickLoadGame(LobbyQuic
 
 void ApplyOnServerNetPackVisitor::visitLobbySetMap(LobbySetMap & pack)
 {
+	fprintf(stderr, "[SRV-DIAG] visitLobbySetMap state=%d pack.mi.fileURI=[%s]\n", (int)srv.getState(), pack.mapInfo ? pack.mapInfo->fileURI.c_str() : "NULL"); fflush(stderr);
 	if(srv.getState() != EServerState::LOBBY)
 	{
 		result = false;

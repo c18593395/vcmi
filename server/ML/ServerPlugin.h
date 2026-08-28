@@ -41,6 +41,9 @@ namespace ML {
         int counter = 0;
     };
 
+    // dims: per-owner pools (dynamic map supporting all player colors)
+    using HeroPools = std::map<int, std::map<std::string, HeroPool>>;
+
     class DLL_LINKAGE ServerPlugin {
     public:
         ServerPlugin(CGameHandler * gh, CGameState * gs, Config & config_);
@@ -69,7 +72,7 @@ namespace ML {
         CGameHandler * gh;
         Config config;
         std::vector<CGTownInstance*> alltowns;
-        std::map<std::string, HeroPool> heropools;
+        HeroPools heropools;
         const std::map<const BattleFieldInfo*, std::vector<const TerrainType*>> battleterrains;
         const std::map<const CGHeroInstance*, std::array<CArtifactInstance*, 3>> allmachines;
         const std::vector<CreatureID> allcreatures;
@@ -82,6 +85,8 @@ namespace ML {
 
         CGHeroInstance* vipHero1 = nullptr;
         CGHeroInstance* vipHero2 = nullptr;
+        const CGHeroInstance* nonvipHero1 = nullptr;
+        const CGHeroInstance* nonvipHero2 = nullptr;
 
         int towncounter = 0;
         int battlecounter = 0;
@@ -95,20 +100,18 @@ namespace ML {
             const CGHeroInstance *&hero2
         );
 
-        void handleVips(
+        void handleRandomArmies(
             const CArmedInstance *&army1,
             const CArmedInstance *&army2,
             const CGHeroInstance *&hero1,
             const CGHeroInstance *&hero2
         );
-
-        void _setVipArmy(CGHeroInstance * heroA, CGHeroInstance * heroB);
-
-        void handleRandomStacks(const CGHeroInstance * hero1, const CGHeroInstance * hero2);
         void handleWarmachines(const CGHeroInstance * hero1, const CGHeroInstance * hero2);
         void handleTightFormation(const CGHeroInstance * hero1, const CGHeroInstance * hero2);
         void handleMinMaxMana(const CGHeroInstance * hero1, const CGHeroInstance * hero2);
         void handleSwapSides(const CGHeroInstance * hero1, const CGHeroInstance * hero2);
+        void handleRandomPrimarySkills(const CGHeroInstance * hero1, const CGHeroInstance * hero2);
+        void handleRandomSecondarySkills(const CGHeroInstance * hero1, const CGHeroInstance * hero2);
 
 
     };

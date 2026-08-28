@@ -884,6 +884,7 @@ void CServerHandler::debugStartTest(std::string filename, bool save)
 	int mi_wait_ms = 0;
 	while(!mi || !boost::iequals(mapInfo->fileURI, mi->fileURI))
 	{
+		fprintf(stderr, "[ML-DEBUG] mi_loop t=%d mapInfo.fileURI=[%s] mi.fileURI=[%s]\n", mi_wait_ms, mapInfo->fileURI.c_str(), mi ? mi->fileURI.c_str() : "NULL"); fflush(stderr);
 		if(mi_wait_ms > 10000)
 		{
 			logGlobal->warn("[ML-DEBUG] mi wait timeout %dms, continuing anyway", mi_wait_ms);
@@ -893,6 +894,7 @@ void CServerHandler::debugStartTest(std::string filename, bool save)
 		std::this_thread::sleep_for(std::chrono::milliseconds(50));
 		mi_wait_ms += 50;
 	}
+	fprintf(stderr, "[ML-DEBUG] mi_loop DONE mapInfo.fileURI=[%s] mi.fileURI=[%s]\n", mapInfo->fileURI.c_str(), mi ? mi->fileURI.c_str() : "NULL"); fflush(stderr);
 	if(settings["session"]["onlyai"].Bool())
 	{
 		// "Click" on color to remove us from it

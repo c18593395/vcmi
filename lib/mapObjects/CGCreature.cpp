@@ -516,6 +516,7 @@ void CGCreature::flee(IGameEventCallback & gameEvents, const CGHeroInstance * h)
 
 void CGCreature::battleFinished(IGameEventCallback & gameEvents, const CGHeroInstance *hero, const BattleResult &result) const
 {
+	fprintf(stderr, "[ML-q] CGCreature::battleFinished winner=%d\n", (int)result.winner);
 	if(result.winner == BattleSide::ATTACKER)
 	{
 		giveReward(gameEvents, hero);
