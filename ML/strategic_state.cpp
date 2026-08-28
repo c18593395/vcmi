@@ -27,6 +27,7 @@
 // 全局指针 — VCMI 每帧更新，Python ctypes 读取
 extern "C" {
     StrategicState* g_strategic_state = nullptr;
+uint8_t* g_terrain_grid = nullptr;  // Phase I.4: pointer, allocated once: 独立全局地形栅格
 }
 
 // 跨 .so 共享的 active hero 全局变量（AAI.cpp 写，本文件读）
@@ -191,7 +192,224 @@ static void fill_mines(StrategicState* state, CGameState& gs) {
     }
 }
 
+// H.8: target_list 填充 — 最近 8 个可采集目标 (MOVE_TO 动作 24)
+// 候选: 未占矿 / 资源堆 / 篝火 / 宝箱 / 宝物 (同层, 曼哈顿最近, 守卫战力 log2)
+static void fill_target_list(StrategicState* state, CGameState& gs) {
+    std::shared_lock gsLock(CGameState::mutex);
+    int ah = state->active_hero;
+    if (ah < 0 || ah >= MAX_HEROES || state->heroes[ah].id < 0) return;
+    int hx = state->heroes[ah].pos_x, hy = state->heroes[ah].pos_y, hz = state->heroes[ah].pos_z;
+
+    struct TargetCand {
+        int type, idx, x, y, z, dist;
+        int64_t guard;
+    };
+    std::vector<TargetCand> cands;
+    auto& map = gs.getMap();
+    for (const auto& objPtr : map.objects) {
+        if (!objPtr) continue;
+        const auto* obj = objPtr.get();
+        int type = 0;
+        if (obj->ID == Obj::MINE) {
+            int owner = obj->getOwner().getNum();
+            if (owner >= 0 && owner < 8) continue;  // 已占矿跳过
+            type = 1;
+        } else if (obj->ID == Obj::RESOURCE) type = 2;
+        else if (obj->ID == Obj::CAMPFIRE) type = 3;
+        else if (obj->ID == Obj::TREASURE_CHEST) type = 4;
+        else if (obj->ID == Obj::ARTIFACT) type = 5;
+        else continue;
+        if (obj->pos.z != hz) continue;  // 同层
+        int dist = std::abs(obj->pos.x - hx) + std::abs(obj->pos.y - hy);
+        if (dist <= 0) continue;
+        int64_t guard = 0;
+        for (const auto* g : gs.guardingCreatures(obj->pos))
+            guard += calc_guard_power(g);
+        cands.push_back({type, obj->id.getNum(), obj->pos.x, obj->pos.y, obj->pos.z, dist, guard});
+    }
+    std::sort(cands.begin(), cands.end(),
+              [](const TargetCand& a, const TargetCand& b) { return a.dist < b.dist; });
+    int n = std::min<int>(TARGET_LIST, (int)cands.size());
+    for (int i = 0; i < n; i++) {
+        state->target_list[i][0] = cands[i].type;
+        state->target_list[i][1] = cands[i].idx;
+        state->target_list[i][2] = cands[i].x;
+        state->target_list[i][3] = cands[i].y;
+        state->target_list[i][4] = cands[i].z;
+        state->target_list[i][5] = cands[i].dist;
+        state->target_list[i][6] = (int32_t)std::log2((double)cands[i].guard + 1.0);
+        state->target_list[i][7] = 0;
+    }
+    for (int i = n; i < TARGET_LIST; i++)
+        for (int j = 0; j < TARGET_DIM; j++)
+            state->target_list[i][j] = 0;
+}
+
+
+// I.2: BFS pathfinding for MOVE_TO - compute first-step direction for each target
+// Writes direction codes (0-7) to reserved[0..7], -1 = unreachable
+// Diagnostics in reserved[8..15] for Python verification
+static void fill_next_dir(StrategicState* state, CGameInfoCallback* gicb) {
+    for (int i = 0; i < 16; i++)
+        state->reserved[i] = -1;
+
+    int ah = state->active_hero;
+    if (ah < 0 || ah >= MAX_HEROES || state->heroes[ah].id < 0) return;
+
+    // 用 visitablePos (与 passable[8]/fill_exploration 同坐标系)
+    const CGHeroInstance* hero = dynamic_cast<const CGHeroInstance*>(
+        gicb->gameState().getObjInstance(ObjectInstanceID(state->heroes[ah].id)));
+    if (!hero) return;
+    int3 hpos = hero->visitablePos();
+    int hx = hpos.x, hy = hpos.y, hz = hpos.z;
+    int W = state->map_width;
+    int H = state->map_height;
+
+    if (hx < 0 || hx >= W || hy < 0 || hy >= H) return;
+
+    // Diagnostic
+    state->reserved[8] = hx; state->reserved[9] = hy; state->reserved[10] = hz;
+    state->reserved[11] = W; state->reserved[12] = H;
+
+    static const int DX[8] = {0, 1, 1, 1, 0, -1, -1, -1};
+    static const int DY[8] = {-1, -1, 0, 1, 1, 1, 0, -1};
+    auto& map = gicb->gameState().getMap();
+
+    for (int t = 0; t < TARGET_LIST; t++) {
+        if (state->target_list[t][0] == 0) continue;
+        int tx = state->target_list[t][2];
+        int ty = state->target_list[t][3];
+        int tz = state->target_list[t][4];
+        if (tz != hz) continue;  // 不同层跳过
+        if (tx == hx && ty == hy) continue;
+
+        std::vector<int> parent(W * H, -1);
+        std::vector<bool> visited(W * H, false);
+        int si = hy * W + hx;
+        visited[si] = true;
+        std::vector<int> q; q.reserve(256); q.push_back(si);
+        int qh = 0; bool found = false;
+
+        while (qh < (int)q.size() && !found) {
+            int ci = q[qh++];
+            int cx = ci % W, cy = ci / W;
+            for (int d = 0; d < 8 && !found; d++) {
+                int nx = cx + DX[d], ny = cy + DY[d];
+                if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+                int ni = ny * W + nx;
+                if (visited[ni]) continue;
+                // Target tile: always reachable (may have visitable object that blocks)
+                bool isTarget = (nx == tx && ny == ty);
+                if (!isTarget) {
+                    auto& dstTile = map.getTile(int3(nx, ny, hz));
+                    if (!dstTile.getTerrain()->isLand() || !dstTile.getTerrain()->isPassable() || dstTile.blocked()) continue;
+                }
+                visited[ni] = true;
+                parent[ni] = ci;
+                if (isTarget) {
+                    int step = ni;
+                    while (parent[step] != si) step = parent[step];
+                    int sx = step % W, sy = step / W;
+                    int fdx = sx - hx, fdy = sy - hy;
+                    for (int k = 0; k < 8; k++)
+                        if (DX[k] == fdx && DY[k] == fdy) { state->reserved[t] = k; break; }
+                    found = true;
+                }
+                q.push_back(ni);
+            }
+        }
+        if (t == 0) {
+            state->reserved[13] = state->reserved[0];
+            state->reserved[14] = (int)q.size();
+        }
+    }
+}
+
 // H.5: v3 扩展字段填充 — 战力/驻守/招募/建造/威胁/预测 (obs 段 1/2/3/10/11)
+
+// Phase I.4: 地形栅格填充 (21x21x4, uint8, HWC)
+// 以英雄为中心, 采集周围 10 格的地形/障碍/对象/可见性
+// 开关: 取消注释以启用地形栅格采集
+#define ENABLE_TERRAIN_GRID
+#ifndef ENABLE_TERRAIN_GRID
+// 开关未定义时, 函数体为空 (零开销)
+static void fill_terrain_grid(StrategicState* state, CGameInfoCallback* gicb) {}
+    fprintf(stderr, "[TERRAIN] fill_terrain_grid called ah=%d\n", state->active_hero);
+#else
+static void fill_terrain_grid(StrategicState* state, CGameInfoCallback* gicb) {
+        fprintf(stderr, "[TERRAIN] fill_terrain_grid called ah=%d\n", state->active_hero);
+
+    int ah = state->active_hero;
+    if (ah < 0 || ah >= MAX_HEROES || state->heroes[ah].id < 0) return;
+
+    const CGHeroInstance* hero = dynamic_cast<const CGHeroInstance*>(
+        gicb->gameState().getObjInstance(ObjectInstanceID(state->heroes[ah].id)));
+    if (!hero) return;
+
+    int3 hpos = hero->visitablePos();
+    int hx = hpos.x, hy = hpos.y, hz = hpos.z;
+    int W = state->map_width, H = state->map_height;
+    int half = GRID_SIZE / 2;  // 10
+    auto& map = gicb->gameState().getMap();
+    auto& gs = gicb->gameState();
+
+    for (int r = 0; r < GRID_SIZE; r++) {
+        for (int c = 0; c < GRID_SIZE; c++) {
+            int mx = hx + (c - half);
+            int my = hy + (r - half);
+            int idx = (r * GRID_SIZE + c) * GRID_CHANNELS;
+
+            // 越界: C1=1 (不可通行), 其余 0
+            if (mx < 0 || mx >= W || my < 0 || my >= H) {
+                state->terrain_grid[idx + 0] = 0;
+                state->terrain_grid[idx + 1] = 1;
+                state->terrain_grid[idx + 2] = 0;
+                state->terrain_grid[idx + 3] = 0;
+                continue;
+            }
+
+            auto& tile = map.getTile(int3(mx, my, hz));
+
+            // C0: terrain type (uint8, 直接存枚举值)
+            state->terrain_grid[idx + 0] = (uint8_t)tile.terrainType;
+
+            // C1: blocked
+            state->terrain_grid[idx + 1] = tile.blocked() ? 1 : 0;
+
+            // C2: object type (优先级: hero>town>monster>artifact>chest>resource>mine>dwelling>teleport>other)
+            uint8_t obj_type = 0;
+            for (auto objId : tile.visitableObjects) {
+                auto obj = gs.getObjInstance(objId);
+                if (!obj) continue;
+                uint8_t t = 10;
+                if (obj->ID == Obj::HERO) t = 6;
+                else if (obj->ID == Obj::TOWN) t = 2;
+                else if (obj->ID == Obj::MONSTER || obj->ID == Obj::RANDOM_MONSTER) t = 5;
+                else if (obj->ID == Obj::ARTIFACT) t = 7;
+                else if (obj->ID == Obj::TREASURE_CHEST) t = 4;
+                else if (obj->ID == Obj::RESOURCE) t = 3;
+                else if (obj->ID == Obj::MINE) t = 1;
+                else if (obj->ID == Obj::CREATURE_GENERATOR1 || obj->ID == Obj::CREATURE_GENERATOR2) t = 8;
+                else if (obj->ID == Obj::SUBTERRANEAN_GATE || obj->ID == Obj::BORDER_GATE) t = 9;
+                static const int prio[] = {0, 5, 9, 6, 7, 8, 10, 8, 4, 3, 1};
+                if (t < 11 && (obj_type == 0 || prio[t] > prio[obj_type]))
+                    obj_type = t;
+            }
+            state->terrain_grid[idx + 2] = obj_type;
+
+            // C3: visibility (训练期全可见)
+            state->terrain_grid[idx + 3] = 1;
+        }
+    }
+    // Write terrain_grid to shared file for Python reading
+    {
+        FILE* fp = fopen("/home/administrator/vcmi-workspace/terrain_grid.bin", "wb");
+        if (fp) { fwrite(state->terrain_grid, 1, GRID_TOTAL, fp); fclose(fp); }
+    }
+    fprintf(stderr, "[TERRAIN] wrote terrain_grid to /home/administrator/vcmi-workspace/terrain_grid.bin\n");
+}
+#endif
+
 // 全知直读 gs.players/heroes/towns 实体 (与 fill_strategic_state 同模式)。
 // 调用前提: heroes/towns/players 段已按全知直读填好 id/owner (槽位靠 id 匹配)。
 static void fill_v3_fields(StrategicState* state, CGameInfoCallback* gicb) {
@@ -524,8 +742,17 @@ static void fill_strategic_state(void* cbPtr) {
         // C 事件奖励: 矿归属表 (battle_result 不清零)
         fill_mines(state, gicb->gameState());
 
+        // H.8: target_list (MOVE_TO 目标列表)
+        fill_target_list(state, gicb->gameState());
+
+        // I.2: next_dir BFS
+        fill_next_dir(state, gicb);
+
         // H.5: v3 扩展字段 (战力/驻守/招募/建造/威胁/预测)
         fill_v3_fields(state, gicb);
+
+        // Phase I.4: 地形栅格 (ENABLE_TERRAIN_GRID 开关控制)
+        fill_terrain_grid(state, gicb);
 }
 
 extern "C" void adventure_process_turn(int playerColor, void* userData) {

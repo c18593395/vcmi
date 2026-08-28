@@ -45,7 +45,7 @@
     ],
     "MAPS/":
     [
-      {"type" : "dir",  "path" : "Maps"}
+      {"type" : "dir",  "path" : "Maps", "depth": 1}
     ],
     "MODS/":
     [

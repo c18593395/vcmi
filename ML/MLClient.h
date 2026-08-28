@@ -17,12 +17,9 @@
 #pragma once
 #include <string>
 #include <functional>
-#include <filesystem>
-#include "AI/MMAI/schema/schema.h"
+#include "AI/MMAI/schema/base.h"
 
 namespace ML {
-    namespace fs = std::filesystem;
-
     constexpr auto AI_STUPIDAI = "StupidAI";
     constexpr auto AI_BATTLEAI = "BattleAI";
     constexpr auto AI_MMAI_USER = "MMAI_USER"; // for user-provided getAction (gym)
@@ -35,6 +32,8 @@ namespace ML {
         AI_MMAI_USER,
         AI_MMAI_MODEL,
         AI_MMAI_BATTLEAI,
+        "Nullkiller2",
+        "MMAI",
     };
 
     const std::vector<std::string> LOGLEVELS = {"trace", "debug", "info", "warn", "error"};
@@ -50,81 +49,20 @@ namespace ML {
         std::function<double(const MMAI::Schema::IState*)> getState
     );
 
+    // NOTE: layout must match libmlclient.so's compiled InitArgs (verified via gdb ptype 2026-07-31).
     struct MMAI_DLL_LINKAGE InitArgs {
-        InitArgs() = delete;
-        InitArgs(
-            std::string mapname,
-            MMAI::Schema::IModel * leftModel,
-            MMAI::Schema::IModel * rightModel,
-            bool leftAllowMlBot,
-            bool rightAllowMlBot,
-            int maxBattles,
-            int seed,
-            int randomHeroes,
-            int randomObstacles,
-            int townChance,
-            int warmachineChance,
-            int randomStackChance,
-            int tightFormationChance,
-            int randomTerrainChance,
-            int leftVipChance,
-            int rightVipChance,
-            std::string battlefieldPattern,
-            int manaMin,
-            int manaMax,
-            int swapSides,
-            std::string loglevelGlobal,
-            std::string loglevelAI,
-            std::string loglevelStats,
-            std::string statsMode,
-            std::string statsStorage,
-            int statsTimeout,
-            int statsPersistFreq,
-            bool headless
-        ) : mapname(mapname)
-          , leftModel(leftModel)
-          , rightModel(rightModel)
-          , leftAllowMlBot(leftAllowMlBot)
-          , rightAllowMlBot(rightAllowMlBot)
-          , maxBattles(maxBattles)
-          , seed(seed)
-          , randomHeroes(randomHeroes)
-          , randomObstacles(randomObstacles)
-          , townChance(townChance)
-          , warmachineChance(warmachineChance)
-          , randomStackChance(randomStackChance)
-          , tightFormationChance(tightFormationChance)
-          , leftVipChance(leftVipChance)
-          , rightVipChance(rightVipChance)
-          , randomTerrainChance(randomTerrainChance)
-          , battlefieldPattern(battlefieldPattern)
-          , manaMin(manaMin)
-          , manaMax(manaMax)
-          , swapSides(swapSides)
-          , loglevelGlobal(loglevelGlobal)
-          , loglevelAI(loglevelAI)
-          , loglevelStats(loglevelStats)
-          , statsMode(statsMode)
-          , statsStorage(statsStorage == "-" ? statsStorage : fs::absolute(fs::path(statsStorage)).string())
-          , statsTimeout(statsTimeout)
-          , statsPersistFreq(statsPersistFreq)
-          , headless(headless) {};
-
+        const std::string mapname;
         MMAI::Schema::IModel * leftModel;
         MMAI::Schema::IModel * rightModel;
         const bool leftAllowMlBot;
         const bool rightAllowMlBot;
-
-        const std::string leftModelFile;
-        const std::string rightModelFile;
-        const std::string mapname;
         const int maxBattles;
         const int seed;
         const int randomHeroes;
         const int randomObstacles;
         const int townChance;
         const int warmachineChance;
-        const int randomStackChance;
+        const int randomArmies;
         const int tightFormationChance;
         const int randomTerrainChance;
         const int leftVipChance;
@@ -141,41 +79,13 @@ namespace ML {
         const int statsTimeout;
         const int statsPersistFreq;
         const bool headless;
+        std::string red = "MMAI";         // 冒险AI red 玩家 (adventureAlliedAI)
+        std::string blue = "Nullkiller2"; // 冒险AI blue/其他 (adventureEnemyAI)
     };
 
-    MMAI_DLL_LINKAGE void* CreateInitArgs(
-        const char* mapname,
-        MMAI::Schema::IModel* leftModel,
-        MMAI::Schema::IModel* rightModel,
-        bool leftAllowMlBot,
-        bool rightAllowMlBot,
-        int maxBattles,
-        int seed,
-        int randomHeroes,
-        int randomObstacles,
-        int townChance,
-        int warmachineChance,
-        int randomStackChance,
-        int tightFormationChance,
-        int randomTerrainChance,
-        int leftVipChance,
-        int rightVipChance,
-        const char* battlefieldPattern,
-        int manaMin,
-        int manaMax,
-        int swapSides,
-        const char* loglevelGlobal,
-        const char* loglevelAI,
-        const char* loglevelStats,
-        const char* statsMode,
-        const char* statsStorage,
-        int statsTimeout,
-        int statsPersistFreq,
-        bool headless
-    );
-    MMAI_DLL_LINKAGE void DestroyInitArgs(void* initArgs);
-    MMAI_DLL_LINKAGE void init_vcmi(void* initArgs);
-    MMAI_DLL_LINKAGE void start_vcmi();
-    MMAI_DLL_LINKAGE void shutdown_vcmi();
+    void MMAI_DLL_LINKAGE init_vcmi(void * initargs);
+
+    void MMAI_DLL_LINKAGE start_vcmi();
+    void MMAI_DLL_LINKAGE shutdown_vcmi();
 }
 [[noreturn]] void handleFatalError(const std::string & message, bool terminate);

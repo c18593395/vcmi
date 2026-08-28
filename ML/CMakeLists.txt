@@ -2,7 +2,6 @@ cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
 
 add_definitions(-DVCMI_BIN_DIR="${CMAKE_BINARY_DIR}/bin")
 add_definitions(-DVCMI_ROOT_DIR="${CMAKE_SOURCE_DIR}")
-add_definitions(-DMMAI_DLL)
 
 add_library(mlclient SHARED
   model_wrappers/function.h
@@ -13,20 +12,26 @@ add_library(mlclient SHARED
   model_wrappers/path.cpp
   MLClient.cpp
   MLClient.h
-  mlclient_exports.def
+  strategic_state.h
+  strategic_state.cpp
 )
-
-target_link_options(mlclient PRIVATE /DEF:${CMAKE_CURRENT_SOURCE_DIR}/mlclient_exports.def)
 
 add_executable(mlclient-cli
   main.cpp
   user_agents/base.h
   user_agents/agent-v13.cpp
   user_agents/agent-v13.h
+  user_agents/agent-v14.cpp
+  user_agents/agent-v14.h
+  user_agents/agent-v14.cpp
+  user_agents/agent-v14.h
+  user_agents/agent-v15.cpp
+  user_agents/agent-v15.h
 )
 
 add_dependencies(mlclient-cli mlclient)
-target_include_directories(mlclient PUBLIC "${CMAKE_SOURCE_DIR}/AI/MMAI" "${CMAKE_SOURCE_DIR}")
+target_include_directories(mlclient PUBLIC "${CMAKE_SOURCE_DIR}/AI/MMAI")
+target_link_libraries(mlclient PRIVATE SDL2::SDL2 SDL2::Image SDL2::Mixer SDL2::TTF)
 target_link_libraries(mlclient PUBLIC vcmi vcmiclientcommon)
 target_link_libraries(mlclient-cli PRIVATE mlclient)
 
@@ -42,7 +47,7 @@ add_custom_command(
     TARGET mlclient          # Replace with the actual target name
     POST_BUILD               # Execute after the target is built
     COMMAND ${CMAKE_COMMAND} -E create_symlink
-    ${CMAKE_SOURCE_DIR}/../data
+    ${CMAKE_SOURCE_DIR}/data
     ${CMAKE_BINARY_DIR}/bin/data
-    COMMENT "symlink ${CMAKE_BINARY_DIR}/bin/data -> ${CMAKE_SOURCE_DIR}/../data"
+    COMMENT "symlink ${CMAKE_BINARY_DIR}/bin/data -> ${CMAKE_SOURCE_DIR}/data"
 )

@@ -343,7 +343,7 @@ namespace ML {
 
 int main(int argc, char * argv[]) {
     auto initargs = ML::parse_args(argc, argv);
-    ML::init_vcmi(initargs);
+    ML::init_vcmi(&initargs);
     ML::start_vcmi();
     return 0;
 }

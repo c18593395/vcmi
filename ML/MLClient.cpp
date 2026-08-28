@@ -14,22 +14,27 @@
 // limitations under the License.
 // =============================================================================
 
-#include "lib/StdInc.h"
-#include "lib/AsyncRunner.h"
+#include "StdInc.h"
+#include "AsyncRunner.h"
+#include "CMT.h"
 #include "AI/MMAI/schema/base.h"
+#include "strategic_state.h"
 
+#include <boost/stacktrace/stacktrace.hpp>
 #include <boost/thread.hpp>
 #include <boost/filesystem.hpp>
 #include <stdexcept>
 #include <condition_variable>
+#include <cstring>
+
+// 跨 .so 直传 red 冒险 AI 名 (Client.cpp 读取, settings 写读层不一致的绕过 — 2026-08-01)
+extern "C" char g_adventure_allied_ai[64] = "MMAI";
 
 #include "AI/MMAI/schema/schema.h"
-#include "lib/ExceptionsCommon.h"
-#include "client/GameEngine.h"
-#include "client/GameInstance.h"
-#include "ML/MLClient.h"
-#include "ML/model_wrappers/scripted.h"
-#include "ML/model_wrappers/function.h"
+#include "ExceptionsCommon.h"
+#include "GameEngine.h"
+#include "GameInstance.h"
+#include "MLClient.h"
 
 #include "lib/filesystem/Filesystem.h"
 #include "lib/texts/CGeneralTextHandler.h"
@@ -39,19 +44,38 @@
 
 #include "lib/logging/CBasicLogConfigurator.h"
 
+#include "client/StdInc.h"
+#include "lib/filesystem/Filesystem.h"
+#include "lib/logging/CBasicLogConfigurator.h"
 #include "lib/CConsoleHandler.h"
-#include "client/mainmenu/CMainMenu.h"
-#include "client/media/CEmptyVideoPlayer.h"
-#include "client/render/IRenderHandler.h"
-#include "vstd/CLoggerBase.h"
-
-// Additional includes for MLClient
-#include "client/CServerHandler.h"
+#include "lib/VCMIDirs.h"
+#include "mainmenu/CMainMenu.h"
+#include "media/CEmptyVideoPlayer.h"
+#include "media/CMusicHandler.h"
+#include "media/CSoundHandler.h"
+#include "media/CVideoHandler.h"
 #include "client/windows/CMessage.h"
-#include "client/render/Graphics.h"  // for Graphics
+#include "client/CServerHandler.h"
+#include "client/ClientCommandManager.h"
 #include "client/gui/CursorHandler.h"
-#include "lib/CStopWatch.h"
+#include "client/eventsSDL/InputHandler.h"
+#include "client/render/Graphics.h"
+#include "client/render/IScreenHandler.h"
+#include "client/CPlayerInterface.h"
 #include "client/gui/WindowHandler.h"
+
+#include "lib/filesystem/Filesystem.h"
+#include "lib/texts/CGeneralTextHandler.h"
+#include "lib/VCMIDirs.h"
+#include "lib/GameLibrary.h"
+#include "lib/CConfigHandler.h"
+#include "render/IRenderHandler.h"
+#include "vstd/CLoggerBase.h"
+#include "windows/InfoWindows.h"
+
+#include <filesystem>
+
+namespace fs = std::filesystem;
 
 static std::optional<std::string> criticalInitializationError;
 std::atomic<bool> headlessQuit = false;
@@ -74,8 +98,6 @@ MMAI::Schema::Baggage * baggage;
 #define LIBEXT "dylib"
 #elif defined(VCMI_UNIX)
 #define LIBEXT "so"
-#elif defined(_WIN32)
-#define LIBEXT "dll"
 #else
 #error "Unsupported OS"
 #endif
@@ -115,6 +137,7 @@ void handleFatalError(const std::string & message, bool terminate)
 namespace ML {
     void shutdown_vcmi() {
         auto l = std::lock_guard(mutex_shutdown);
+        if (flag_shutdown) return;
         cond_shutdown.notify_all();
         flag_shutdown = true;
 
@@ -167,20 +190,20 @@ namespace ML {
         exit(1);
     }
 
-    void validateArguments(InitArgs &a) {
+    void validateArguments(
+        MMAI::Schema::IModel * leftModel,
+        MMAI::Schema::IModel * rightModel,
+        const InitArgs & a)
+    {
         auto wd = boost::filesystem::current_path();
 
-        if (a.statsMode != "disabled" && a.statsMode != "red" && a.statsMode != "blue") {
+        if (a.statsMode != "disabled" && a.statsMode != "red" && a.statsMode != "blue" && a.statsMode != "") {
             std::cerr << "Bad value for statsMode: expected disabled|red|blue, got: " << a.statsMode << "\n";
-            exit(1);
         }
 
         if (a.statsStorage != "-") {
             auto f = std::filesystem::path(a.statsStorage);
-            if (!std::filesystem::is_regular_file(f)) {
-                std::cerr << "Bad value for statsStorage: file does not exist: " << f << " (hint: use the SQLs in server/ML/sql to create it)\n";
-                exit(1);
-            }
+            validateFile("stats-storage", f.string(), wd);
         }
 
         if (a.maxBattles < 0) {
@@ -213,13 +236,28 @@ namespace ML {
             exit(1);
         }
 
+        if (0 < 0) {
+            std::cerr << "Bad value for randomPrimarySkills: expected a non-negative integer, got: " << 0 << "\n";
+            exit(1);
+        }
+
         if (a.warmachineChance < 0 || a.warmachineChance > 100) {
             std::cerr << "Bad value for warmachineChance: expected an integer between 0 and 100, got: " << a.warmachineChance << "\n";
             exit(1);
         }
 
-        if (a.randomStackChance < 0 || a.randomStackChance > 100) {
-            std::cerr << "Bad value for randomStackChance: expected an integer between 0 and 100, got: " << a.randomStackChance << "\n";
+        if (5000 < 500 || 5000 > 10000000) {
+            std::cerr << "Bad value for randomArmyValueMin: expected an integer between 500 and 10000000, got: " << 5000 << "\n";
+            exit(1);
+        }
+
+        if ((5000000 < 5000) || 5000000 > 10000000) {
+            std::cerr << "Bad value for randomArmyValueMax: expected an integer between randomArmyValueMin and 10000000, got: " << 5000000 << "\n";
+            exit(1);
+        }
+
+        if (30 < 0 || 30 > 100) {
+            std::cerr << "Bad value for randomArmyTargetVar: expected an integer between 0 and 100, got: " << 30 << "\n";
             exit(1);
         }
 
@@ -258,22 +296,17 @@ namespace ML {
             exit(1);
         }
 
-        if (boost::filesystem::is_directory(VCMI_BIN_DIR)) {
-            if (!boost::filesystem::is_regular_file(boost::filesystem::path(VCMI_BIN_DIR) / "AI" / "libMMAI." LIBEXT)) {
-                std::cerr << "Bad value for VCMI_BIN_DIR: exists, but AI/libMMAI." LIBEXT " was not found: " << VCMI_BIN_DIR << "\n";
-                exit(1);
-            }
-        } else {
-            std::cerr << "Bad value for VCMI_BIN_DIR: " << VCMI_BIN_DIR << "\n(not a directory)\n";
-                exit(1);
-        }
-
         // XXX: can this blow given preinitDLL is not yet called here?
         auto dir = VCMIDirs::get().userDataPath() / "Maps";
         validateFile("map", a.mapname, VCMIDirs::get().userDataPath() / "Maps");
 
         if (std::find(LOGLEVELS.begin(), LOGLEVELS.end(), a.loglevelAI) == LOGLEVELS.end()) {
             std::cerr << "Bad value for loglevelAI: " << a.loglevelAI << "\n";
+            exit(1);
+        }
+
+        if (std::find(LOGLEVELS.begin(), LOGLEVELS.end(), "error") == LOGLEVELS.end()) {
+            std::cerr << "Bad value for loglevelNetwork: " << "error" << "\n";
             exit(1);
         }
 
@@ -288,7 +321,7 @@ namespace ML {
         }
 
         // Prevent misconfigured paths at boot during ML training
-        for (auto &model : {a.leftModel, a.rightModel}) {
+        for (auto &model : {leftModel, rightModel}) {
             if (model->getType() != MMAI::Schema::ModelType::PATH)
                 continue;
 
@@ -302,11 +335,16 @@ namespace ML {
         }
     }
 
-    void processArguments(InitArgs &a) {
+    void processArguments(
+        MMAI::Schema::IModel * leftModel,
+        MMAI::Schema::IModel * rightModel,
+        const InitArgs & a)
+    {
+        fprintf(stderr, "[ML-DIAG] processArguments ENTER red=[%s] blue=[%s]\n", a.red.c_str(), a.blue.c_str()); fflush(stderr);
         headless = a.headless;
         baggage = new MMAI::Schema::Baggage;
-        baggage->modelLeft = a.leftModel;
-        baggage->modelRight = a.rightModel;
+        baggage->modelLeft = leftModel;
+        baggage->modelRight = rightModel;
         baggage->allowMlBotLeft = a.leftAllowMlBot;
         baggage->allowMlBotRight = a.rightAllowMlBot;
 
@@ -325,7 +363,10 @@ namespace ML {
         Settings(settings.write({"server", "ML", "randomObstacles"}))->Integer() = a.randomObstacles;
         Settings(settings.write({"server", "ML", "townChance"}))->Integer() = a.townChance;
         Settings(settings.write({"server", "ML", "warmachineChance"}))->Integer() = a.warmachineChance;
-        Settings(settings.write({"server", "ML", "randomStackChance"}))->Integer() = a.randomStackChance;
+        Settings(settings.write({"server", "ML", "randomArmies"}))->Bool() = a.randomArmies;
+        Settings(settings.write({"server", "ML", "randomArmyValueMin"}))->Integer() = 5000;
+        Settings(settings.write({"server", "ML", "randomArmyValueMax"}))->Integer() = 5000000;
+        Settings(settings.write({"server", "ML", "randomArmyTargetVar"}))->Integer() = 30;
         Settings(settings.write({"server", "ML", "tightFormationChance"}))->Integer() = a.tightFormationChance;
         Settings(settings.write({"server", "ML", "randomTerrainChance"}))->Integer() = a.randomTerrainChance;
         Settings(settings.write({"server", "ML", "leftVipChance"}))->Integer() = a.leftVipChance;
@@ -333,6 +374,7 @@ namespace ML {
         Settings(settings.write({"server", "ML", "battlefieldPattern"}))->String() = a.battlefieldPattern;
         Settings(settings.write({"server", "ML", "manaMin"}))->Integer() = a.manaMin;
         Settings(settings.write({"server", "ML", "manaMax"}))->Integer() = a.manaMax;
+        Settings(settings.write({"server", "ML", "randomPrimarySkills"}))->Integer() = 0;
         Settings(settings.write({"server", "ML", "swapSides"}))->Integer() = a.swapSides;
         Settings(settings.write({"server", "ML", "statsMode"}))->String() = a.statsMode;
         Settings(settings.write({"server", "ML", "statsStorage"}))->String() = a.statsStorage;
@@ -344,20 +386,29 @@ namespace ML {
         // Combat MMAI = BAI
 
         // Set all adventure AIs to MMAI (i.e. AAI, which creates BAI for combat)
-        Settings(settings.write({"ai", "adventureAlliedAI"}))->String() = "MMAI";
-        Settings(settings.write({"ai", "adventureEnemyAI"}))->String() = "MMAI";
+        logGlobal->info("ML-DIAG: a.red=[%s] a.blue=[%s]", a.red.c_str(), a.blue.c_str());
+        // 跨 .so 直传 red 冒险 AI (settings 写 session 层, Client 读配置层不一致 — 2026-08-01 采集排障)
+        strncpy(g_adventure_allied_ai, a.red.c_str(), sizeof(g_adventure_allied_ai) - 1);
+        g_adventure_allied_ai[sizeof(g_adventure_allied_ai) - 1] = '\0';
+        Settings(settings.write({"ai", "adventureAlliedAI"}))->String() = a.red;
+        Settings(settings.write({"ai", "adventureEnemyAI"}))->String() = a.blue;
         Settings(settings.write({"session", "oneGoodAI"}))->Bool() = false;
 
         // With GUI, the player's "adventure" AI is CPlayerInterface
         // When auto-combat is pressed, it creates whatever combatAlliedAI says
-        Settings(settings.write({"server", "combatAlliedAI"}))->String() = "MMAI";
+        // ML fix (C8.5): 战斗 AI 必须走 MMAI 体系 (#46 验证) — VCMI 内置 StupidAI 库 ABI 不匹配
+        // (libStupidAI.so does not export GetNewAI → 加载崩), BattleAI headless 下等待回调卡死
+        // MMAI BAI + Scripted 模型(leftModel/rightModel=Scripted("StupidAI")) 自动裁决战斗
+        Settings(settings.write({"ai", "combatAlliedAI"}))->String() = "MMAI";
+        Settings(settings.write({"ai", "combatEnemyAI"}))->String() = "MMAI";
+        Settings(settings.write({"ai", "combatNeutralAI"}))->String() = "MMAI";
 
         // Set all adventure AIs to AAI, which always create BAIs
 
 
         // Set max difficulty (affects BattleAI number of simulated turns)
         // TODO: make configurable
-        Settings(settings.write({"general", "lastDifficulty"}))->Integer() = 3;
+        Settings(settings.write({"general", "lastDifficulty"}))->Integer() = 4;
 
         // convert to "ai/mymap.vmap" to "maps/ai/mymap.vmap"
         auto mappath = std::filesystem::path("Maps") / std::filesystem::path(a.mapname);
@@ -383,7 +434,6 @@ namespace ML {
         };
 
         auto loglevelRng = getloglevel("rng");
-        auto loglevelNetwork = getloglevel("network");
         auto loglevelMod = getloglevel("mod");
         auto loglevelAnimation = getloglevel("animation");
         auto loglevelBonus = getloglevel("bonus");
@@ -406,20 +456,29 @@ namespace ML {
         conflog("ai", a.loglevelAI);
         conflog("stats", a.loglevelStats);
         conflog("rng", loglevelRng);
-        conflog("network", loglevelNetwork);
+        conflog("network", "error");
         conflog("mod", loglevelMod);
         conflog("animation", loglevelAnimation);
         conflog("bonus", loglevelBonus);
     }
 
-    void init_vcmi(InitArgs &a) {
-        // Store original shell workdir (as VCMI will chdir to VCMI_BIN_DIR)
+    void init_vcmi(void* initargs_ptr)
+    {
+        auto& a = *static_cast<InitArgs*>(initargs_ptr);
+        auto* leftModel = a.leftModel;
+        auto* rightModel = a.rightModel;
+        // Initialize strategic state global pointer (Python ctypes reads this)
+        g_strategic_state = new StrategicState();
+        memset(g_strategic_state, 0, sizeof(StrategicState));
+        g_strategic_state->_version = 1;
+
+        // Store original shell workdir
         // The original workdir is used for loading models specified by relative paths
         // (then is again changed to VCMI_BIN_DIR to prevent VCMI errors)
-        auto wd = fs::current_path();
+        auto wd = boost::filesystem::current_path();
 
         // chdir needed for VCMI init
-        fs::current_path(fs::path(VCMI_BIN_DIR));
+        boost::filesystem::current_path(VCMI_BIN_DIR);
         std::cout.flags(std::ios::unitbuf);
         console = new CConsoleHandler();
         console->start();
@@ -432,8 +491,8 @@ namespace ML {
         LIBRARY->initializeFilesystem(false);
 
         // validating after preinitDLL as the VCMIDirs are not initialized before it
-        validateArguments(a);
-        processArguments(a);
+        validateArguments(leftModel, rightModel, a);
+        processArguments(leftModel, rightModel, a);
 
         // printf("map: %s\n", map.c_str());
         // printf("loglevelGlobal: %s\n", loglevelGlobal.c_str());
@@ -443,7 +502,7 @@ namespace ML {
         Settings(settings.write({"battle", "speedFactor"}))->Integer() = 5;
         Settings(settings.write({"battle", "rangeLimitHighlightOnHover"}))->Bool() = true;
         Settings(settings.write({"battle", "stickyHeroInfoWindows"}))->Bool() = false;
-        Settings(settings.write({"logging", "console", "format"}))->String() = "[%t][%n] %l %m";
+        Settings(settings.write({"logging", "console", "format"}))->String() = "[%p/%t][%n] %l %m";
         Settings(settings.write({"logging", "console", "coloredOutputEnabled"}))->Bool() = true;
         Settings(settings.write({"logging", "console", "threshold"}))->String() = "trace";
 
@@ -468,14 +527,14 @@ namespace ML {
         if (!headless)
             ENGINE->setEngineUser(GAME.get());
 
-        boost::thread loading([]() {
+        std::thread loading([]() {
             try
             {
                 CStopWatch tmh;
                 LIBRARY->initializeLibrary();
                 logGlobal->info("Initializing VCMI_Lib: %d ms", tmh.getDiff());
             }
-            catch (const DataLoadingException & e)
+            catch (const std::exception & e)
             {
                 criticalInitializationError = e.what();
                 return;
@@ -484,7 +543,11 @@ namespace ML {
         loading.join();
 
         if (criticalInitializationError.has_value())
-            handleFatalError(criticalInitializationError.value(), false);
+        {
+            logGlobal->warn("ML: GameLibrary init failed (no game data), continuing in ML mode: %s",
+                criticalInitializationError.value());
+            criticalInitializationError.reset();
+        }
 
         if (!headless) {
             graphics = new Graphics(); // should be before curh
@@ -495,9 +558,29 @@ namespace ML {
         }
     }
 
+    namespace {
+        void terminate_handler() {
+            if (auto eptr = std::current_exception()) {
+                try {
+                    std::rethrow_exception(eptr);
+                } catch (const std::exception& e) {
+                    logGlobal->error("Exception: " + std::string(e.what()));
+                } catch (...) {
+                    logGlobal->error("Exception: unknown");
+                }
+            }
+
+            std::cerr << boost::stacktrace::stacktrace() << "\n";
+            std::abort();
+        }
+    }
+
     void start_vcmi() {
+        fprintf(stderr, "[MMAI-DIAG] ML::start_vcmi entered\n"); fflush(stderr);
         if (mapname == "")
             throw std::runtime_error("call init_vcmi first");
+
+        std::set_terminate(terminate_handler);
 
         logGlobal->info("friendlyAI -> " + settings["ai"]["combatAlliedAI"].String());
         logGlobal->info("playerAI -> " + settings["ai"]["adventureEnemyAI"].String());
@@ -509,7 +592,7 @@ namespace ML {
         auto &si = GAME->server();
         if (headless) {
             auto l = std::unique_lock(mutex_shutdown);
-            auto t = boost::thread([&si]() {
+            auto t = std::thread([&si]() {
                 si.debugStartTest(mapname, false);
             });
             cond_shutdown.wait(l);
@@ -523,167 +606,5 @@ namespace ML {
 
         shutdown_vcmi();
         quitApplicationImmediately(0);
-    }
-
-    MMAI::Schema::IModel* MakeScriptedModel(std::string keyword) {
-        return new ModelWrappers::Scripted(keyword, MMAI::Schema::Side::LEFT);
-    }
-
-    MMAI::Schema::IModel* MakeUserModel(
-        int version,
-        std::function<int(const MMAI::Schema::IState*)> getAction,
-        std::function<double(const MMAI::Schema::IState*)> getValue
-    ) {
-        return new ModelWrappers::Function(version, "UserModel", MMAI::Schema::Side::LEFT, getAction, getValue);
-    }
-
-    void* CreateInitArgs(
-        const char* mapname,
-        MMAI::Schema::IModel* leftModel,
-        MMAI::Schema::IModel* rightModel,
-        bool leftAllowMlBot,
-        bool rightAllowMlBot,
-        int maxBattles,
-        int seed,
-        int randomHeroes,
-        int randomObstacles,
-        int townChance,
-        int warmachineChance,
-        int randomStackChance,
-        int tightFormationChance,
-        int randomTerrainChance,
-        int leftVipChance,
-        int rightVipChance,
-        const char* battlefieldPattern,
-        int manaMin,
-        int manaMax,
-        int swapSides,
-        const char* loglevelGlobal,
-        const char* loglevelAI,
-        const char* loglevelStats,
-        const char* statsMode,
-        const char* statsStorage,
-        int statsTimeout,
-        int statsPersistFreq,
-        bool headless
-    ) {
-        return new InitArgs(
-            std::string(mapname),
-            leftModel,
-            rightModel,
-            leftAllowMlBot,
-            rightAllowMlBot,
-            maxBattles,
-            seed,
-            randomHeroes,
-            randomObstacles,
-            townChance,
-            warmachineChance,
-            randomStackChance,
-            tightFormationChance,
-            randomTerrainChance,
-            leftVipChance,
-            rightVipChance,
-            std::string(battlefieldPattern),
-            manaMin,
-            manaMax,
-            swapSides,
-            std::string(loglevelGlobal),
-            std::string(loglevelAI),
-            std::string(loglevelStats),
-            std::string(statsMode),
-            std::string(statsStorage),
-            statsTimeout,
-            statsPersistFreq,
-            headless
-        );
-    }
-
-    void DestroyInitArgs(void* initArgs) {
-        delete static_cast<InitArgs*>(initArgs);
-    }
-
-    void init_vcmi(void* initArgs) {
-        init_vcmi(*static_cast<InitArgs*>(initArgs));
-    }
-}
-
-// =============================================================================
-// C-linkage wrapper functions for dynamic loading via GetProcAddress
-// These are exported with unmangled names, avoiding C++ name mangling
-// incompatibilities across compiler versions.
-// =============================================================================
-extern "C" {
-
-    __declspec(dllexport) MMAI::Schema::IModel* ML_MakeScriptedModel(std::string keyword) {
-        return ML::MakeScriptedModel(keyword);
-    }
-
-    __declspec(dllexport) MMAI::Schema::IModel* ML_MakeUserModel(
-        int version,
-        std::function<int(const MMAI::Schema::IState*)> getAction,
-        std::function<double(const MMAI::Schema::IState*)> getValue
-    ) {
-        return ML::MakeUserModel(version, getAction, getValue);
-    }
-
-    __declspec(dllexport) void* ML_CreateInitArgs(
-        const char* mapname,
-        MMAI::Schema::IModel* leftModel,
-        MMAI::Schema::IModel* rightModel,
-        bool leftAllowMlBot,
-        bool rightAllowMlBot,
-        int maxBattles,
-        int seed,
-        int randomHeroes,
-        int randomObstacles,
-        int townChance,
-        int warmachineChance,
-        int randomStackChance,
-        int tightFormationChance,
-        int randomTerrainChance,
-        int leftVipChance,
-        int rightVipChance,
-        const char* battlefieldPattern,
-        int manaMin,
-        int manaMax,
-        int swapSides,
-        const char* loglevelGlobal,
-        const char* loglevelAI,
-        const char* loglevelStats,
-        const char* statsMode,
-        const char* statsStorage,
-        int statsTimeout,
-        int statsPersistFreq,
-        bool headless
-    ) {
-        return ML::CreateInitArgs(
-            mapname, leftModel, rightModel,
-            leftAllowMlBot, rightAllowMlBot,
-            maxBattles, seed, randomHeroes, randomObstacles,
-            townChance, warmachineChance, randomStackChance,
-            tightFormationChance, randomTerrainChance,
-            leftVipChance, rightVipChance, battlefieldPattern,
-            manaMin, manaMax, swapSides,
-            loglevelGlobal, loglevelAI, loglevelStats,
-            statsMode, statsStorage,
-            statsTimeout, statsPersistFreq, headless
-        );
-    }
-
-    __declspec(dllexport) void ML_DestroyInitArgs(void* initArgs) {
-        ML::DestroyInitArgs(initArgs);
-    }
-
-    __declspec(dllexport) void ML_init_vcmi(void* initArgs) {
-        ML::init_vcmi(initArgs);
-    }
-
-    __declspec(dllexport) void ML_start_vcmi() {
-        ML::start_vcmi();
-    }
-
-    __declspec(dllexport) void ML_shutdown_vcmi() {
-        ML::shutdown_vcmi();
     }
 }
