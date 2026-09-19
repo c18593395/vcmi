@@ -8,9 +8,49 @@
  *
  */
 #include "StdInc.h"
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h> // 09-10 死锁诊断: GetCurrentThreadId
+#undef IGNORE // winbase.h IGNORE 宏与 Canvas.h 枚举成员冲突
+#endif
 #include "GameEngine.h"
 #include "GameLibrary.h"
 #include "Discord.h"
+
+// 09-10 死锁诊断: interfaceMutex 锁操作打点 — 冻结现场 stderr 最后一条 LOCKED 无对应
+// UNLOCK 的 tid 即持锁者 (winpthreads Normal mutex 不记录 owner, dump 无法定位)
+// ra= 调用方返回地址, 用 pdata 映射到具体锁点
+#ifdef _WIN32
+static inline unsigned long _dbg_tid() { return GetCurrentThreadId(); }
+#else
+#include <sys/syscall.h>
+#include <unistd.h>
+static inline unsigned long _dbg_tid() { return (unsigned long)syscall(SYS_gettid); }
+#endif
+
+void GameEngine::LoggingMutex::lock()
+{
+	fprintf(stderr, "[MUTEX] LOCK   tid=%lu ra=%p\n", _dbg_tid(), __builtin_return_address(0)); fflush(stderr);
+	m.lock();
+	fprintf(stderr, "[MUTEX] LOCKED tid=%lu ra=%p\n", _dbg_tid(), __builtin_return_address(0)); fflush(stderr);
+}
+
+bool GameEngine::LoggingMutex::try_lock()
+{
+	fprintf(stderr, "[MUTEX] TRY    tid=%lu ra=%p\n", _dbg_tid(), __builtin_return_address(0)); fflush(stderr);
+	bool ret = m.try_lock();
+	if(ret)
+		fprintf(stderr, "[MUTEX] LOCKED tid=%lu ra=%p\n", _dbg_tid(), __builtin_return_address(0)); fflush(stderr);
+	return ret;
+}
+
+void GameEngine::LoggingMutex::unlock()
+{
+	fprintf(stderr, "[MUTEX] UNLOCK tid=%lu ra=%p\n", _dbg_tid(), __builtin_return_address(0)); fflush(stderr);
+	m.unlock();
+}
 
 #include "gui/CIntObject.h"
 #include "gui/CursorHandler.h"
@@ -193,6 +233,16 @@ const Point & GameEngine::getCursorPosition() const
 Point GameEngine::screenDimensions() const
 {
 	return screenHandlerInstance->getLogicalResolution();
+}
+
+bool GameEngine::isRoeData() const
+{
+	return LIBRARY->isRoeData();
+}
+
+bool GameEngine::isDemoData() const
+{
+	return LIBRARY->isDemoData();
 }
 
 void GameEngine::drawPerformanceOverlay()

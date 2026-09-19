@@ -165,7 +165,7 @@ namespace
 		if(!model)
 		{
 			logAi->error("MMAI: %s: falling back to %s", key, repo->fallbackName);
-			ASSERT(repo->fallbackModel, "fallback error: model is null");
+			ASSERT((bool)repo->fallbackModel, "fallback error: model is null");
 			model = repo->fallbackModel;
 		}
 
@@ -489,4 +489,10 @@ void Router::yourTacticPhase(const BattleID & bid, int distance)
 	MMAI_LOG_TAG;
 	bai->yourTacticPhase(bid, distance);
 }
+}
+
+// 09-19 重建补丁: router.h 声明了 onNewSystemMessageReceived(const override) 但实现缺失
+void MMAI::BAI::Router::onNewSystemMessageReceived(const std::string & msg) const
+{
+        fprintf(stderr, "[Router DBG] onNewSystemMessageReceived: %s\n", msg.c_str());
 }

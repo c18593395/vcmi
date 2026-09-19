@@ -690,14 +690,19 @@ static void fill_strategic_state(void* cbPtr) {
             int3 hpos(state->heroes[state->active_hero].pos_x, state->heroes[state->active_hero].pos_y, state->heroes[state->active_hero].pos_z);
             if (hero) hpos = hero->visitablePos();
             // Get hero's own tile for isClear(from) check
-            const TerrainTile* hposTile = gicb->getTile(hpos, false);
             for (int d = 0; d < 8; d++) {
                 int3 target(hpos.x + dx[d], hpos.y + dy[d], hpos.z);
                 const TerrainTile* tt = gicb->getTile(target, false);
                 if (!tt) {
                     state->passable[d] = 0;  // off map / not visible
                 } else {
-                    state->passable[d] = tt->isClear(hposTile) ? 1 : 0;
+                    // passable 闸门修正 (09-17 方案甲): 口径对齐 CGameHandler::moveHero movingOntoObstacle
+                    // (CGameHandler.cpp:916 blocked && !visitable; 拒绝仅: 地形不可通行 || 障碍且不可访问)。
+                    // blocked-visitable 格 (敌英雄/怪/城) 可走且触发访问/战斗 (CGHeroInstance::onHeroVisit
+                    // ENEMIES→startBattle 无条件); 旧 isClear 口径把它们标 0 = 观测错误, 模型/MOVE_TO/蓝AI
+                    // 三方结构性不可达 → 真实战斗恒不触发 (WIN-1 真实击杀=0 机械根因, 踩坑索引见预研文档)
+                    state->passable[d] = (tt->getTerrain()->isPassable()
+                                          && !(tt->blocked() && !tt->visitable())) ? 1 : 0;
                 }
             }
         } else {
@@ -722,6 +727,16 @@ static void fill_strategic_state(void* cbPtr) {
                     t.pos_z = town->pos.z;
                     t.buildings = 0;
                     memset(t.garrison, 0, sizeof(t.garrison));
+                    // 2026-09-01 P3 取兵链路: 驻军填充 — getUpperArmy (garrisonHero private,
+                    // 同 is_garrisoned 技巧): 敌城=守军, 无 visiting 时=城防兵力;
+                    // obs 城槽 field 6-12 已预留, Python 侧无需改动
+                    {
+                    	const CArmedInstance* garArmy = town->getUpperArmy();
+                    	for (int gi = 0; gi < 7; gi++) {
+                    		auto* gst = garArmy ? garArmy->getStackPtr(SlotID(gi)) : nullptr;
+                    		t.garrison[gi] = gst ? gst->getCount() : 0;
+                    	}
+                    }
                     t.gold_income = 0;
                     t.recruit_mask_lo = 0; t.recruit_mask_hi = 0;
                     t.build_mask_lo = 0; t.build_mask_hi = 0;
@@ -928,14 +943,15 @@ extern "C" void strategic_state_update(void* game_state_ptr) {
             const CGHeroInstance* hero = dynamic_cast<const CGHeroInstance*>(gs.getObjInstance(ObjectInstanceID(state.heroes[state.active_hero].id)));
             int3 hpos(state.heroes[state.active_hero].pos_x, state.heroes[state.active_hero].pos_y, state.heroes[state.active_hero].pos_z);
             if (hero) hpos = hero->visitablePos();
-            auto& hpos_tile = gs.getMap().getTile(hpos);
             for (int d = 0; d < 8; d++) {
                 int3 target(hpos.x + dx[d], hpos.y + dy[d], hpos.z);
                 if (target.x < 0 || target.x >= (int)map.width || target.y < 0 || target.y >= (int)map.height) {
                     state.passable[d] = 0;
                 } else {
+                    // passable 闸门修正 (09-17 方案甲): 同第一处, 口径对齐 GHandler movingOntoObstacle
                     auto& tile = gs.getMap().getTile(target);
-                    state.passable[d] = tile.isClear(&hpos_tile) ? 1 : 0;
+                    state.passable[d] = (tile.getTerrain()->isPassable()
+                                         && !(tile.blocked() && !tile.visitable())) ? 1 : 0;
                 }
             }
         }

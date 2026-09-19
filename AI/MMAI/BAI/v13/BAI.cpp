@@ -76,22 +76,32 @@ void BAI::battleStart(
 	bool replayAllowed
 )
 {
-	battle = cb->getBattle(bid);
+	// ML fix (C8.5): 整个 battleStart 包 try-catch — neutral 战斗/异常时防止 std::unexpected 崩溃
+	try {
+		battle = cb->getBattle(bid);
 
 #ifdef ENABLE_ML
-	const auto * art = battle->battleGetMyHero()->getArt(ArtifactPosition::BACKPACK_START);
-	// info("allowMlBot: %d", allowMlBot);
-	if (allowMlBot && art && art->getTypeId() == ArtifactID::GRAIL) {
-		logger.info("GRAIL found in hero -- preparing MLBot (for model: %s)", model->getName());
-		mlbot = std::make_shared<MLBot>("BattleAI");
-		mlbot->initBattleInterface(env, cb, {.enableSpellsUsage = false});
-		mlbot->battleStart(bid, army1, army2, tile, hero1, hero2, side, replayAllowed);
-	}
+		const auto * myHero = battle->battleGetMyHero();
+		const auto * art = myHero ? myHero->getArt(ArtifactPosition::BACKPACK_START) : nullptr;
+		// info("allowMlBot: %d", allowMlBot);
+		if (allowMlBot && art && art->getTypeId() == ArtifactID::GRAIL) {
+			logger.info("GRAIL found in hero -- preparing MLBot (for model: %s)", model->getName());
+			mlbot = std::make_shared<MLBot>("BattleAI");
+			mlbot->initBattleInterface(env, cb, {.enableSpellsUsage = false});
+			mlbot->battleStart(bid, army1, army2, tile, hero1, hero2, side, replayAllowed);
+		}
 #endif
 
-	state = initState(battle.get());
-	getActionTotalMs = 0;
-	getActionTotalCalls = 0;
+		state = initState(battle.get());
+		getActionTotalMs = 0;
+		getActionTotalCalls = 0;
+	} catch (const std::exception & e) {
+		logger.error("BAI::battleStart exception: %s", e.what());
+		state = nullptr;
+	} catch (...) {
+		logger.error("BAI::battleStart unknown exception");
+		state = nullptr;
+	}
 }
 
 // XXX: battleEnd() is NOT called by CPlayerInterface (i.e. GUI)
@@ -442,7 +452,7 @@ void BAI::_activeStack(const BattleID & bid, const CStack * astack)
 
 std::shared_ptr<BattleAction> BAI::buildBattleAction()
 {
-	ASSERT(state->battlefield, "Cannot build battle action if state->battlefield is missing");
+	ASSERT((bool)state->battlefield, "Cannot build battle action if state->battlefield is missing");
 	auto * action = state->action.get();
 	const auto * bf = state->battlefield.get();
 	const auto * acstack = bf->astack->cstack;
@@ -501,7 +511,7 @@ std::shared_ptr<BattleAction> BAI::buildBattleAction()
 			}
 			break;
 			case HexAction::SHOOT:
-				ASSERT(stack, "no target to shoot");
+				ASSERT((bool)stack, "no target to shoot");
 				res = std::make_shared<BattleAction>(BattleAction::makeShotAttack(acstack, stack->cstack));
 				break;
 			case HexAction::AMOVE_TR:
@@ -627,7 +637,7 @@ void BAI::handleUnexpectedAction(const CStack * acstack, const Hex * hex, Action
 			}
 
 			// only remaining is ACCESSIBLE
-			ASSERT(a == EAccessibility::ACCESSIBLE, "accessibility should've been ACCESSIBLE, was: " = std::to_string(EI(a)));
+			ASSERT(a == EAccessibility::ACCESSIBLE, "accessibility should've been ACCESSIBLE, was: " + std::to_string(EI(a)));
 
 			auto nbh = BattleHex{};
 

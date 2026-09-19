@@ -422,26 +422,30 @@ void AAI::battleStart(
 	battleAI = CDynLibHandler::getNewBattleAI("MMAI");
 	battleAI->initBattleInterface(env, cbc, aiCombatOptions);
 	battleAI->battleStart(bid, army1, army2, tile, hero1, hero2, side_, replayAllowed);
+	in_battle = true;  // ML fix (08-27)
 }
 
 void AAI::battleEnd(const BattleID & bid, const BattleResult * br, QueryID queryID)
 {
 	info("*** battleEnd (QueryID: " + std::to_string(static_cast<int>(queryID)) + ") ***");
+	in_battle = false;  // ML fix (08-27): 战斗结束, 允许 yourTurn 完成 endTurn
 
 	battleAI->battleEnd(bid, br, queryID);
 
 	if(cb->getBattle(bid)->battleGetMySide() == BattleSide::ATTACKER)
 	{
-		ASSERT(queryID != -1, "QueryID is -1, but we are ATTACKER");
-		info("Answering query " + std::to_string(queryID) + " to re-play battle");
+		if(queryID.getNum() != -1)  // ML fix (08-27): 守卫战斗 (Hero vs monster) 无 CBattleDialogQuery -> queryID=-1, 跳过 replay 应答防断言崩
+		{
+			info("Answering query " + std::to_string(queryID) + " to re-play battle");
 
-		asyncTasks->run(
-			[this, queryID]()
-			{
-				std::shared_lock gsLock(CGameState::mutex);
-				cb->selectionMade(1, queryID);
-			}
-		);
+			asyncTasks->run(
+				[this, queryID]()
+				{
+					std::shared_lock gsLock(CGameState::mutex);
+					cb->selectionMade(1, queryID);
+				}
+			);
+		}
 	}
 	else
 	{
@@ -451,6 +455,21 @@ void AAI::battleEnd(const BattleID & bid, const BattleResult * br, QueryID query
 
 		// The defender should not answer replay battle queries
 		info("Ignoring query " + std::to_string(queryID));
+	}
+
+	// ML fix (08-27): 战斗结束收尾挂起的回合 (守卫战斗场景: yourTurn 不 endTurn, 这里补上)
+	bool expected = true;
+	if (pending_endturn.compare_exchange_strong(expected, false)) {
+		info("Battle ended, ending pending turn (delayed 1.5s)");
+		// ML fix (08-27): 延迟 endTurn — 等服务器战斗收尾 (守卫残余 showGarrisonDialog 等查询
+		// 由事件循环 handler 自动应答后顶部清空, 否则 endTurn 被拒)
+		asyncTasks->run([this]() {
+			std::this_thread::sleep_for(std::chrono::milliseconds(500));  // ML fix (08-27): garrison 已服务器侧跳过, 1s 足够
+			cb->waitTillRealize = false;
+			cb->selectionMade(0, last_query);
+			cb->endTurn();
+			cb->waitTillRealize = true;
+		});
 	}
 
 	battleAI.reset();
@@ -503,11 +522,7 @@ void AAI::yourTurn(QueryID queryID)
 
 	if (a < 0) {
 		cb->selectionMade(0, queryID);
-		// ML fix (ring6): red yourTurn runs on the runNetwork thread; waitTillRealize=true
-		// would wait for a PackageApplied that only runNetwork itself can deliver -> self-deadlock.
-		cb->waitTillRealize = false;
 		cb->endTurn();
-		cb->waitTillRealize = true;
 		return;
 	}
 
@@ -522,10 +537,7 @@ void AAI::yourTurn(QueryID queryID)
 		}
 		// n==0 保持 g_active_hero 不变
 		cb->selectionMade(0, queryID);
-		// ML fix (ring6): same self-deadlock guard as a<0 path
-		cb->waitTillRealize = false;
 		cb->endTurn();
-		cb->waitTillRealize = true;
 		return;
 	}
 
@@ -589,8 +601,8 @@ void AAI::yourTurn(QueryID queryID)
 					hidx = 0;
 				int3 target(h[hidx]->pos.x + dx[a], h[hidx]->pos.y + dy[a], h[hidx]->pos.z);
 				cb->moveHero(h[hidx], target, false);
-				// ML fix (C8.5): 等待移动实现后再 endTurn (最多 2s), 移动失败(BLOCKED)快速继续
-				for (int i = 0; i < 20; i++) {
+				// ML fix (08-27): 等移动实现 (最多 1s)。不在此等战斗 — 轮询阻塞事件循环, battleStart/battleEnd 回调无法处理
+				for (int i = 0; i < 3; i++) {
 					std::this_thread::sleep_for(std::chrono::milliseconds(100));
 					auto cur = h[hidx]->pos;
 					if (cur.x == target.x && cur.y == target.y && cur.z == target.z)
@@ -634,8 +646,20 @@ void AAI::yourTurn(QueryID queryID)
 		}
 	}
 
-	cb->selectionMade(0, queryID);
-	cb->endTurn();
+	// ML fix (08-27): 不立即 endTurn — 守卫战斗触发时 endTurn 被服务器拒 ("has to answer queries")
+	// 挂起回合: 战斗由 battleEnd 回调收尾; 无战斗由兜底任务 2 秒后 endTurn
+	pending_endturn = true;
+	last_query = queryID;
+	asyncTasks->run([this]() {
+		std::this_thread::sleep_for(std::chrono::milliseconds(500));
+		bool expected = true;
+		if (pending_endturn.compare_exchange_strong(expected, false) && !in_battle.load()) {
+			cb->waitTillRealize = false;
+			cb->selectionMade(0, last_query);
+			cb->endTurn();
+			cb->waitTillRealize = true;
+		}
+	});
 	cb->waitTillRealize = true;
 }
 
@@ -670,10 +694,22 @@ void AAI::showBlockingDialog(
 	fprintf(stderr, "[AAI DBG] showBlockingDialog: cb=%p askID=%d\n", (void*)cb.get(), askID.getNum()); if(cb) cb->selectionMade(0, askID);
 }
 
-void AAI::showGarrisonDialog(const CArmedInstance * up, const CGHeroInstance * down, bool removableUnits, QueryID queryID)
+void AAI::showGarrisonDialog(const CArmedInstance * up, const CGHeroInstance * down, bool removableUnits, QueryID queryID, const MetaString & customTitle)
 {
+        (void)customTitle; // 09-19 签名对齐 AAI.h (引擎新增 customTitle 参数)
 	debug("*** showGarrisonDialog ***");
-	fprintf(stderr, "[AAI DBG] showGarrisonDialog: cb=%p queryID=%d\n", (void*)cb.get(), queryID.getNum()); if(cb) cb->selectionMade(0, queryID);
+	fprintf(stderr, "[AAI DBG] showGarrisonDialog: cb=%p queryID=%d\n", (void*)cb.get(), queryID.getNum());
+	// ML fix (08-27): 守卫残余合并进英雄 (NK2 pickBestCreatures 同款) — 不合并则残余对象不移除 -> 访问流程卡死
+	if (up && down && up->tempOwner == down->tempOwner) {
+		for (auto it = up->stacks.begin(); it != up->stacks.end(); ++it) {
+			try {
+				SlotID dst = down->getSlotFor(it->second->getCreature());
+				if (dst.validSlot())
+					cb->mergeStacks(up, down, it->first, dst);
+			} catch(...) {}
+		}
+	}
+	if(cb) cb->selectionMade(0, queryID);
 }
 
 void AAI::showMapObjectSelectDialog(
@@ -1145,4 +1181,11 @@ void AAI::log(ELogLevel::ELogLevel level, const std::function<std::string()> & c
 		_log(level, "%s", cb());
 }
 
+}
+
+// 09-19 重建补丁: AAI.h 声明了 onNewSystemMessageReceived(const override) 但实现缺失,
+// 链接 libvcmi.so 报 undefined symbol; 补透传打点实现
+void MMAI::AAI::AAI::onNewSystemMessageReceived(const std::string & msg) const
+{
+        fprintf(stderr, "[AAI DBG] onNewSystemMessageReceived: %s\n", msg.c_str());
 }

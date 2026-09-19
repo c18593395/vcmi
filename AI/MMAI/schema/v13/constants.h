@@ -29,7 +29,6 @@ constexpr int N_ACTIONS = N_NONHEX_ACTIONS + (165 * N_HEX_ACTIONS);
 constexpr int STACK_ATTR_OFFSET = EI(HexAttribute::_count) - EI(StackAttribute::_count);
 
 // Control actions (not part of the regular action space)
-constexpr Action ACTION_UNSET = -666;
 constexpr Action ACTION_RESET = -1;
 constexpr Action ACTION_RENDER_ANSI = -2;
 
@@ -180,8 +179,7 @@ constexpr auto BFIELD_HP_SLOPE = 7.5;
 constexpr auto MAX_ROUNDS = 30;
 
 constexpr GlobalEncoding GLOBAL_ENCODING{
-	// LS is the correct encoding for BATTLE_ROUND, but since it replaces BATTLE_SIDE
-	// which had n=2 => use LE to keep the dimensions unchanged.
+	E5(X::GA::BATTLE_SIDE, X::CS, 1),
 	E5(X::GA::BATTLE_ROUND, X::LE, MAX_ROUNDS + 1),
 	E5(X::GA::BATTLE_SIDE_ACTIVE_PLAYER, X::CE, 1), // NULL means no battle
 	E5(X::GA::BATTLE_WINNER, X::CE, 1), // NULL means ongoing battle
@@ -293,21 +291,21 @@ static_assert(MisconfiguredExpnormSlopeIndex(GLOBAL_ENCODING) == -1, "Found misc
 static_assert(MisconfiguredExpnormSlopeIndex(PLAYER_ENCODING) == -1, "Found miscalculated binary vmax element at this index");
 static_assert(MisconfiguredExpnormSlopeIndex(HEX_ENCODING) == -1, "Found miscalculated binary vmax element at this index");
 
+// compat with v14
+constexpr auto LINK_SIZES = std::array<int, EI(LinkType::_count)> {
+    1, // ADJACENT
+    1, // REACH
+    1, // RANGED_MOD
+    1, // ACTS_BEFORE
+    1, // MELEE_DMG_REL
+    1, // RETAL_DMG_REL
+    1, // RANGED_DMG_REL
+};
+
 constexpr int BATTLEFIELD_STATE_SIZE_GLOBAL = EncodedSize(GLOBAL_ENCODING);
 constexpr int BATTLEFIELD_STATE_SIZE_ONE_PLAYER = EncodedSize(PLAYER_ENCODING);
 constexpr int BATTLEFIELD_STATE_SIZE_ONE_HEX = EncodedSize(HEX_ENCODING);
 constexpr int BATTLEFIELD_STATE_SIZE_ALL_HEXES = 165 * BATTLEFIELD_STATE_SIZE_ONE_HEX;
 constexpr int BATTLEFIELD_STATE_SIZE =
 	BATTLEFIELD_STATE_SIZE_GLOBAL + BATTLEFIELD_STATE_SIZE_ONE_PLAYER + BATTLEFIELD_STATE_SIZE_ONE_PLAYER + BATTLEFIELD_STATE_SIZE_ALL_HEXES;
-// compat with v14
-constexpr auto LINK_SIZES = std::array<int, EI(LinkType::_count)> {
-	1, // ADJACENT
-	1, // REACH
-	1, // RANGED_MOD
-	1, // ACTS_BEFORE
-	1, // MELEE_DMG_REL
-	1, // RETAL_DMG_REL
-	1, // RANGED_DMG_REL
-};
-
 }
