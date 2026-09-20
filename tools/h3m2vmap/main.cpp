@@ -142,9 +142,82 @@ namespace
 		"wateringHole",
 	};
 
+	// #291 修复: 压缩 objects 中的 null 槽 (加载器占位 / hero pool 占位英雄)
+	// 根因: CMap::allocateUniqueInstanceID / addToHeroPool 会 objects.push_back(nullptr)
+	// 占位; CMap::removeObject 的 id 重排循环 (CMap.cpp:691) 与 saveMap 的紧凑假设都
+	// 不兼容 null 槽 — 删除点扫过 null 槽即解引用 nullptr → segfault
+	// (Dragon Orb core backtrace 实锤, 20 张 convert_fail 同根因)。
+	// 压缩时同步重映射: 对象 id / tiles (visitable+blocking) / towns / heroesOnMap / heroesPool。
+	// 注: win/loss 触发器里的 objectID 不重映射 — R6 默认 reset 覆盖, 中间无人解引用。
+	long long compactNullSlots(CMap & map)
+	{
+		const size_t n = map.objects.size();
+		bool hasNull = false;
+		for(const auto & p : map.objects)
+			if(!p) { hasNull = true; break; }
+		if(!hasNull) return 0;
+
+		std::vector<ObjectInstanceID> old2new(n);
+		std::vector<std::shared_ptr<CGObjectInstance>> compacted;
+		compacted.reserve(n);
+		for(size_t k = 0; k < n; ++k)
+		{
+			const auto & p = map.objects[k];
+			if(!p) { old2new[k] = ObjectInstanceID(static_cast<si32>(-1)); continue; }
+			old2new[k] = ObjectInstanceID(static_cast<si32>(compacted.size()));
+			compacted.push_back(p);
+		}
+		// 对象 id 重排 (加载后 obj->id == 槽位, 正序遍历安全)
+		for(auto & p : compacted)
+			p->id = old2new[p->id.getNum()];
+
+		auto remap = [&old2new, n](ObjectInstanceID & id)
+		{
+			const size_t k = static_cast<size_t>(id.getNum());
+			if(k < n && old2new[k].getNum() >= 0)
+				id = old2new[k];
+		};
+		// 全图 tile 引用
+		for(int lvl = 0; lvl < map.levels(); ++lvl)
+			for(int y = 0; y < map.height; ++y)
+				for(int x = 0; x < map.width; ++x)
+				{
+				auto & t = map.getTile(int3(x, y, lvl));
+				for(auto & id : t.visitableObjects) remap(id);
+				for(auto & id : t.blockingObjects) remap(id);
+				}
+		// towns/heroesOnMap 为 private 且 saveMap/loadMap 不序列化 (MapFormatJson 零引用),
+		// 跳过重映射 — removeObject 后续对它们的修正基于失配旧值, 结果不进产物, 无害
+		map.objects = std::move(compacted);
+		// hero pool: 不在场的英雄占 null 槽 (heroesPool 为 private, 经 public API 遍历),
+		// 压缩后重新分配 id (与 addToHeroPool 同构); at() 越界即池尾
+		size_t poolCount = 0;
+		for(si32 ht = 0; ; ++ht)
+		{
+			CGHeroInstance * h = nullptr;
+			try
+			{
+				h = map.tryGetFromHeroPool(HeroTypeID(ht));
+			}
+			catch(const std::exception &)
+			{
+				break;
+			}
+			if(!h) continue;
+			// 09-20 fix: do NOT push_back(nullptr) here - pool heroes live OUTSIDE the compact
+			// objects vector (virtual ids); a null slot would be dereferenced by the reindex loop
+			// in CMap::removeObject (CMap.cpp:691) -> segfault
+			h->id = ObjectInstanceID(static_cast<si32>(map.objects.size() + poolCount));
+			poolCount++;
+		}
+		return static_cast<long long>(n - map.objects.size() + poolCount);
+	}
+
 	void applyB3Rules(CMap & map, B3Options & o, const std::string & mapName)
 	{
 		o.report.clear();
+		// #291: 先压缩 null 槽 (见 compactNullSlots 注释), removeObject/saveMap 依赖紧凑 vector
+		o.report["compact_removed_slots"] = compactNullSlots(map);
 		const PlayerColor NEUTRAL = PlayerColor::NEUTRAL;
 
 		if(o.r1)
