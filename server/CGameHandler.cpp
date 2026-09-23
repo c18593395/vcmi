@@ -157,7 +157,11 @@ void CGameHandler::levelUpHero(const CGHeroInstance * hero)
 	hlu.primskill = primarySkill;
 	hlu.skills = randomizer->rollSecondarySkills(hero);
 
-	if (!hero->getOwner().isValidPlayer())
+	// ML fix (2026-08-17, 09-23 恢复): AI 玩家升级自动选第一个技能 (无头服务器模式)。
+	// 防 NK2 heroGotLevel answeredQuery 持 CGameState 共享锁死锁 → 升级查询永不关闭
+	// → 压住 CBattleQuery → battleResultAccepted popIfTop FAIL → "has to answer queries" 刷屏。
+	// AI 无需人工选技能: 直接取第一个并完成 (客户端模式 AI 独立进程自己答, 不受影响)。
+	if (!hero->getOwner().isValidPlayer() || !gameInfo().getPlayerState(hero->getOwner())->isHuman())
 	{
 		sendAndApply(hlu);
 		if(hlu.skills.empty())

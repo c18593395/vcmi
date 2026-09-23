@@ -105,12 +105,13 @@ QueryPtr QueriesProcessor::topQuery(PlayerColor player)
 void QueriesProcessor::removeQuery(QueryPtr query)
 {
 	// ML fix (2026-08-17): 任意位置强制移除 (战斗结算兜底)。
-	// 1) onRemoval 只调一次: 多玩家查询二次触发 battleFinalize → 段错误。
+	// 1) [09-14 修正/09-23 恢复] onRemoval 每玩家各调一次 (对齐上游 popQuery per-player 语义):
+	//    旧 removalDone 守卫让 PvP 共享 query 只调一次 → remainingBattleQueriesCount 欠减
+	//    → BattleEnded 永不发 → currentBattles 残留 (+ 无人判 LOSER)。见踩坑 #228。
 	// 2) 移除后必须触发暴露链 (对齐 popQuery): 否则被压的 visitQuery 永不 onExposure
 	//    → 访问永不结束 (obj=1 永久) → 怪物战斗收尾断 (battleFinished 不触发)。
 	if(!query)
 		return;
-	bool removalDone = false;
 	for(PlayerColor player : query->players)
 	{
 		auto & v = queries[player];
@@ -119,11 +120,7 @@ void QueriesProcessor::removeQuery(QueryPtr query)
 		{
 			v.erase(it);
 			fprintf(stderr, "[ML-stk] FORCE-REMOVE player=%d depth=%d %s\n", player.getNum(), (int)queries[player].size(), query->toString().c_str());
-			if(!removalDone)
-			{
 				query->onRemoval(player);
-				removalDone = true;
-			}
 			auto nextQuery = topQuery(player);
 			if(nextQuery)
 				nextQuery->onExposure(query);
