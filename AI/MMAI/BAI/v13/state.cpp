@@ -325,8 +325,7 @@ void State::_onActionStarted(const BattleAction & ba, int round)
 	}
 	ASSERT(found, "could not find cstack with unitId: " + std::to_string(ba.stackNumber));
 
-	if(actingStack->creatureId() == CreatureID::FIRST_AID_TENT || actingStack->creatureId() == CreatureID::CATAPULT
-	   || actingStack->creatureId() == CreatureID::ARROW_TOWERS)
+	if(actingStack->isFirstAidTent() || actingStack->isCatapult() || actingStack->isTurret())
 	{
 		// These are auto-acting for BAI
 		// Cannot build state in this case

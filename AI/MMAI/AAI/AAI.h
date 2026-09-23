@@ -18,6 +18,7 @@
 
 #include "battle/AICombatOptions.h"
 #include "callback/CAdventureAI.h"
+#include <atomic>
 
 VCMI_LIB_NAMESPACE_BEGIN
 class AsyncRunner;
@@ -37,6 +38,9 @@ public:
 	std::string dllName;
 	std::shared_ptr<CBattleGameInterface> battleAI;
 	std::unique_ptr<AsyncRunner> asyncTasks;
+	std::atomic<bool> in_battle{false};  // ML fix (08-27): 战斗进行标志
+	std::atomic<bool> pending_endturn{false};  // ML fix (08-27): 回合挂起标志 (moveHero 后不立即 endTurn, 等 battleEnd/兜底收尾)
+	QueryID last_query;  // ML fix (08-27): 挂起回合的 queryID
 
 	std::string getBattleAIName() const override;
 
@@ -129,7 +133,8 @@ public:
 		const CArmedInstance * up,
 		const CGHeroInstance * down,
 		bool removableUnits,
-		QueryID queryID
+		QueryID queryID,
+		const MetaString & customTitle
 	) override; //all stacks operations between these objects become allowed, interface has to call onEnd when done
 	void showHillFortWindow(const CGObjectInstance * object, const CGHeroInstance * visitor) override;
 	void showInfoDialog(EInfoWindowMode type, const std::string & text, const std::vector<Component> & components, int soundID) override;
@@ -162,6 +167,7 @@ public:
 	void actionFinished(const BattleID & bid, const BattleAction & action) override;
 	void actionStarted(const BattleID & bid, const BattleAction & action) override;
 	void activeStack(const BattleID & bid, const CStack * stack) override;
+	void onNewSystemMessageReceived(const std::string & msg) const override;
 	void battleAttack(const BattleID & bid, const BattleAttack * ba) override;
 	void battleCatapultAttacked(const BattleID & bid, const CatapultAttack & ca) override;
 	void battleGateStateChanged(const BattleID & bid, const EGateState state) override;

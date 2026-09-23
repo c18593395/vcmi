@@ -1,8 +1,0 @@
-EXPORTS
-    ML_MakeScriptedModel
-    ML_MakeUserModel
-    ML_CreateInitArgs
-    ML_DestroyInitArgs
-    ML_init_vcmi
-    ML_start_vcmi
-    ML_shutdown_vcmi

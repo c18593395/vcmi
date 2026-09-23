@@ -25,8 +25,7 @@
 #include "ML/model_wrappers/path.h"
 #include "MLClient.h"
 
-#include "user_agents/agent-v13.h"
-
+#include "user_agents/agent-v15.h"
 
 namespace po = boost::program_options;
 
@@ -50,12 +49,16 @@ namespace ML {
         return "Values: " + boost::algorithm::join(all, " | ");
     }
 
-    InitArgs parse_args(int argc, char * argv[]) {
+    std::tuple< MMAI::Schema::IModel *, MMAI::Schema::IModel *, InitArgs>
+    parse_args(int argc, char * argv[]) {
         int maxBattles = 0;
         int seed = 0;
         int randomHeroes = 0;
         int randomObstacles = 0;
-        int randomStackChance = 0;
+        bool randomArmies = false;
+        int randomArmyValueMin = 5000;
+        int randomArmyValueMax = 1000000;
+        int randomArmyTargetVar = 30;
         int tightFormationChance = 0;
         int randomTerrainChance = 0;
         int leftVipChance = 0;
@@ -65,6 +68,7 @@ namespace ML {
         int warmachineChance = 0;
         int manaMin = 0;
         int manaMax = 0;
+        int randomPrimarySkills = 0;
         int swapSides = 0;
         bool leftAllowMlBot = false;
         bool rightAllowMlBot = false;
@@ -81,6 +85,7 @@ namespace ML {
             {"map", "gym/A1.vmap"},
             {"loglevel-global", "error"},
             {"loglevel-ai", "warn"},
+            {"loglevel-network", "error"},
             {"loglevel-stats", "warn"},
             {"left-ai", AI_MMAI_USER},
             {"right-ai", AI_STUPIDAI},
@@ -114,16 +119,22 @@ namespace ML {
                 "Percent chance to have the combat in a town (no town combat if 0*)")
             ("warmachine-chance", po::value<int>()->value_name("<N>"),
                 "Percent chance to add ballista/tent/cart in combat (no war machines if 0*)")
-            ("random-stack-chance", po::value<int>()->value_name("<N>"),
-                "Percent chance to set a random stack for each of the 7 hero slots (default 0*)")
+            ("random-armies", po::bool_switch(&randomArmies),
+                "Randomize armies before each battle")
+            ("random-army-value-min", po::value<int>()->value_name("<N>"),
+                "Min total value for randomized armies (default 5000*)")
+            ("random-army-value-max", po::value<int>()->value_name("<N>"),
+                "Max total value for randomized armies (default 1000000*)")
+            ("random-army-target-var", po::value<int>()->value_name("<N>"),
+                "Percent variance for meeting the target total value (default 30*)")
             ("tight-formation-chance", po::value<int>()->value_name("<N>"),
                 "Percent chance to set a tight army formation (default 0*)")
             ("random-terrain-chance", po::value<int>()->value_name("<N>"),
                 "Percent chance to set a random terrain (default 0*)")
             ("left-vip-chance", po::value<int>()->value_name("<N>"),
-                "Percent chance to swap entire left army with 1 random shooter + guards (default 0*)")
+                "Percent chance to generate a VIP left army with 1 shooter stack + guard stacks (default 0*)")
             ("right-vip-chance", po::value<int>()->value_name("<N>"),
-                "Percent chance to swap entire right army with 1 random shooter + guards (default 0*)")
+                "Percent chance to generate a VIP right army with 1 shooter stack + guard stacks (default 0*)")
             ("battlefield-pattern", po::value<std::string>()->value_name("<REGEX>"),
                 "If given, it will be used as a regex pattern for filtering battlefields"
                 "based on their json key (see config/battlefields.json)")
@@ -131,6 +142,8 @@ namespace ML {
                 "Minimum mana to give to give each hero at the start of combat (default 0*)")
             ("mana-max", po::value<int>()->value_name("<N>"),
                 "Maximum mana to give to give each hero at the start of combat (default 100*)")
+            ("random-primary-skills", po::value<int>()->value_name("<N>"),
+                "Set a random values to each hero's attack and defense the start of combat (default 0*)")
             ("swap-sides", po::value<int>()->value_name("<N>"),
                 "Swap combat sides each Nth combat (disabled if 0*)")
             ("left-ai", po::value<std::string>()->value_name("<AI>"),
@@ -141,8 +154,6 @@ namespace ML {
                 ("Path to model.zip (" + omap.at("left-model") + "*)").c_str())
             ("right-model", po::value<std::string>()->value_name("<FILE>"),
                 ("Path to model.zip (" + omap.at("right-model") + "*)").c_str())
-            ("right-model", po::value<std::string>()->value_name("<FILE>"),
-                ("Path to model.zip (" + omap.at("right-model") + "*)").c_str())
             ("left-allow-mlbot", po::bool_switch(&leftAllowMlBot),
                 "Allow MLBot to control VIP armies when left AI is MMAI_USER or MMAI_MODEL")
             ("right-allow-mlbot", po::bool_switch(&rightAllowMlBot),
@@ -151,6 +162,8 @@ namespace ML {
                 values(LOGLEVELS, omap.at("loglevel-global")).c_str())
             ("loglevel-ai", po::value<std::string>()->value_name("<LVL>"),
                 values(LOGLEVELS, omap.at("loglevel-ai")).c_str())
+            ("loglevel-network", po::value<std::string>()->value_name("<LVL>"),
+                values(LOGLEVELS, omap.at("loglevel-network")).c_str())
             ("loglevel-stats", po::value<std::string>()->value_name("<LVL>"),
                 values(LOGLEVELS, omap.at("loglevel-stats")).c_str())
             ("interactive", po::bool_switch(&interactive),
@@ -168,7 +181,7 @@ namespace ML {
             ("stats-timeout", po::value<int>()->value_name("<N>"),
                 "Timeout in ms for obtaining a DB lock in stats storage (default 60000*)")
             ("stats-persist-freq", po::value<int>()->value_name("<N>"),
-                "Persist stats to storage file every N battles (read only if 0*)");
+                "Persist stats to storage file every N battles (no persistence if 0*)");
 
         po::variables_map vm;
 
@@ -209,8 +222,14 @@ namespace ML {
         if (vm.count("warmachine-chance"))
             warmachineChance = vm.at("warmachine-chance").as<int>();
 
-        if (vm.count("random-stack-chance"))
-            randomStackChance = vm.at("random-stack-chance").as<int>();
+        if (vm.count("random-army-value-min"))
+            randomArmyValueMin = vm.at("random-army-value-min").as<int>();
+
+        if (vm.count("random-army-value-max"))
+            randomArmyValueMax = vm.at("random-army-value-max").as<int>();
+
+        if (vm.count("random-army-target-var"))
+            randomArmyTargetVar = vm.at("random-army-target-var").as<int>();
 
         if (vm.count("tight-formation-chance"))
             tightFormationChance = vm.at("tight-formation-chance").as<int>();
@@ -232,6 +251,9 @@ namespace ML {
 
         if (vm.count("mana-max"))
             manaMax = vm.at("mana-max").as<int>();
+
+        if (vm.count("random-primary-skills"))
+            randomPrimarySkills = vm.at("random-primary-skills").as<int>();
 
         if (vm.count("swap-sides"))
             swapSides = vm.at("swap-sides").as<int>();
@@ -289,7 +311,7 @@ namespace ML {
         std::string rightModelFile = "";
 
         if (leftAi == AI_MMAI_USER) {
-            leftModel = new UserAgents::AgentV13(benchmark, interactive, autorender, false, recordings);
+            leftModel = new UserAgents::AgentV15(benchmark, interactive, autorender, false, recordings);
             // prevent double render if both models are MMAI_USER
             autorender &= !headless;
         } else if (leftAi == AI_MMAI_MODEL) {
@@ -300,7 +322,7 @@ namespace ML {
         }
 
         if (rightAi == AI_MMAI_USER) {
-            rightModel = new UserAgents::AgentV13(benchmark, interactive, autorender, false, recordings);
+            rightModel = new UserAgents::AgentV15(benchmark, interactive, autorender, false, recordings);
         } else if (rightAi == AI_MMAI_MODEL) {
             // BAI will load the actual model based on leftModel->getName()
             rightModel = new ModelWrappers::Path(omap.at("right-model"));
@@ -308,42 +330,47 @@ namespace ML {
             rightModel = new ModelWrappers::Scripted(rightAi, MMAI::Schema::Side::RIGHT);
         }
 
-        return InitArgs(
-            omap.at("map"),
-            leftModel,
-            rightModel,
-            leftAllowMlBot,
-            rightAllowMlBot,
-            maxBattles,
-            seed,
-            randomHeroes,
-            randomObstacles,
-            townChance,
-            warmachineChance,
-            randomStackChance,
-            tightFormationChance,
-            randomTerrainChance,
-            leftVipChance,
-            rightVipChance,
-            battlefieldPattern,
-            manaMin,
-            manaMax,
-            swapSides,
-            omap.at("loglevel-global"),
-            omap.at("loglevel-ai"),
-            omap.at("loglevel-stats"),
-            omap.at("stats-mode"),
-            omap.at("stats-storage"),
-            statsTimeout,
-            statsPersistFreq,
-            headless
-        );
+        return {leftModel, rightModel, {
+            .leftAllowMlBot=leftAllowMlBot,
+            .rightAllowMlBot=rightAllowMlBot,
+            .leftModelFile="",
+            .rightModelFile="",
+            .mapname=omap.at("map"),
+            .maxBattles=maxBattles,
+            .seed=seed,
+            .randomHeroes=randomHeroes,
+            .randomObstacles=randomObstacles,
+            .townChance=townChance,
+            .warmachineChance=warmachineChance,
+            .randomArmies=randomArmies,
+            .randomArmyValueMin=randomArmyValueMin,
+            .randomArmyValueMax=randomArmyValueMax,
+            .randomArmyTargetVar=randomArmyTargetVar,
+            .tightFormationChance=tightFormationChance,
+            .randomTerrainChance=randomTerrainChance,
+            .leftVipChance=leftVipChance,
+            .rightVipChance=rightVipChance,
+            .battlefieldPattern=battlefieldPattern,
+            .manaMin=manaMin,
+            .manaMax=manaMax,
+            .randomPrimarySkills=randomPrimarySkills,
+            .swapSides=swapSides,
+            .loglevelGlobal=omap.at("loglevel-global"),
+            .loglevelAI=omap.at("loglevel-ai"),
+            .loglevelNetwork=omap.at("loglevel-network"),
+            .loglevelStats=omap.at("loglevel-stats"),
+            .statsMode=omap.at("stats-mode"),
+            .statsStorage=omap.at("stats-storage"),
+            .statsTimeout=statsTimeout,
+            .statsPersistFreq=statsPersistFreq,
+            .headless=headless
+        }};
     }
 }
 
 int main(int argc, char * argv[]) {
-    auto initargs = ML::parse_args(argc, argv);
-    ML::init_vcmi(&initargs);
+    auto parsed = ML::parse_args(argc, argv);
+    ML::init_vcmi(std::get<0>(parsed), std::get<1>(parsed), std::get<2>(parsed));
     ML::start_vcmi();
     return 0;
 }

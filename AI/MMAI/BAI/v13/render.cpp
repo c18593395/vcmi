@@ -820,7 +820,7 @@ void Verify(const State * state) // NOSONAR - function used for debugging only
 								ensureValueMatch(vf, cstack->ableToRetaliate(), "HEX.STACK_FLAGS1.CAN_RETALIATE");
 								break;
 							case SF1::SLEEPING:
-								cstack->unitType()->getId() == CreatureID::AMMO_CART
+								cstack->isAmmoCart()
 									? ensureValueMatch(vf, false, "HEX.STACK_FLAGS1.SLEEPING")
 									: ensureValueMatch(vf, cstack->hasBonusOfType(BonusType::NOT_ACTIVE), "HEX.STACK_FLAGS1.SLEEPING");
 								break;
@@ -1276,32 +1276,28 @@ std::string Render(const Schema::IState * istate, const Action * action) // NOSO
 					value = side ? bluecol + "BLUE" + nocol : redcol + "RED" + nocol;
 				break;
 			case 2:
-				name = "Round";
-				value = std::to_string(gstats->getAttr(GA::BATTLE_ROUND));
-				break;
-			case 3:
 				name = "Last action";
 				value = action ? action->name() + " [" + std::to_string(action->action) + "]" : "";
 				break;
-			case 4:
+			case 3:
 				name = "DMG dealt";
 				value = boost::str(boost::format("%d (%d since start)") % mystats->getAttr(PA::DMG_DEALT_NOW_ABS) % mystats->getAttr(PA::DMG_DEALT_ACC_ABS));
 				break;
-			case 5:
+			case 4:
 				name = "DMG received";
 				value =
 					boost::str(boost::format("%d (%d since start)") % mystats->getAttr(PA::DMG_RECEIVED_NOW_ABS) % mystats->getAttr(PA::DMG_RECEIVED_ACC_ABS));
 				break;
-			case 6:
+			case 5:
 				name = "Value killed";
 				value =
 					boost::str(boost::format("%d (%d since start)") % mystats->getAttr(PA::VALUE_KILLED_NOW_ABS) % mystats->getAttr(PA::VALUE_KILLED_ACC_ABS));
 				break;
-			case 7:
+			case 6:
 				name = "Value lost";
 				value = boost::str(boost::format("%d (%d since start)") % mystats->getAttr(PA::VALUE_LOST_NOW_ABS) % mystats->getAttr(PA::VALUE_LOST_ACC_ABS));
 				break;
-			case 8:
+			case 7:
 			{
 				// XXX: if there's a draw, this text will be incorrect
 				auto restext = gstats->getAttr(GA::BATTLE_WINNER) ? (bluecol + "BLUE WINS") : (redcol + "RED WINS");
@@ -1310,19 +1306,19 @@ std::string Render(const Schema::IState * istate, const Action * action) // NOSO
 				value = ended ? (restext + nocol) : "";
 			}
 			break;
-			case 9:
+			case 8:
 				name = "Army value (L)";
 				value = boost::str(
 					boost::format("%d (%.0f‰ of current BF value)") % lpstats->getAttr(PA::ARMY_VALUE_NOW_ABS) % lpstats->getAttr(PA::ARMY_VALUE_NOW_REL)
 				);
 				break;
-			case 10:
+			case 9:
 				name = "Army value (R)";
 				value = boost::str(
 					boost::format("%d (%.0f‰ of current BF value)") % rpstats->getAttr(PA::ARMY_VALUE_NOW_ABS) % rpstats->getAttr(PA::ARMY_VALUE_NOW_REL)
 				);
 				break;
-			case 11:
+			case 10:
 				name = "Current BF value";
 				value = boost::str(
 					boost::format("%d (%.0f‰ of starting BF value)") % gstats->getAttr(GA::BFIELD_VALUE_NOW_ABS) % gstats->getAttr(GA::BFIELD_VALUE_NOW_REL0)

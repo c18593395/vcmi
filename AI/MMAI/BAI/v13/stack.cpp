@@ -450,7 +450,7 @@ void Stack::processBonuses()
 				setflag(F1::DEATH_STARE);
 				break;
 			case BonusType::NOT_ACTIVE:
-				if(cstack->unitType()->getId() != CreatureID::AMMO_CART)
+				if(!cstack->isAmmoCart())
 					setflag(F1::SLEEPING);
 		}
 

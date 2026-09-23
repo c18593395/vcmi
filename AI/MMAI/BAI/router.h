@@ -15,8 +15,7 @@
 #include "battle/AICombatOptions.h"
 #include "battle/CPlayerBattleCallback.h"
 #include "callback/CBattleGameInterface.h"
-
-#include "schema/base.h"
+#include "AI/MMAI/schema/base.h"
 
 namespace MMAI::BAI
 {
@@ -45,6 +44,7 @@ public:
 	void actionFinished(const BattleID & bid, const BattleAction & action) override;
 	void actionStarted(const BattleID & bid, const BattleAction & action) override;
 	void activeStack(const BattleID & bid, const CStack * stack) override; //called when it's turn of that stack
+	void onNewSystemMessageReceived(const std::string & msg) const override;
 	void battleAttack(const BattleID & bid, const BattleAttack * ba) override;
 	void battleCatapultAttacked(const BattleID & bid, const CatapultAttack & ca) override;
 	void battleEnd(const BattleID & bid, const BattleResult * br, QueryID queryID) override;
@@ -83,6 +83,7 @@ private:
 	bool wasWaitingForRealize = false;
 	std::string addrstr = "?";
 	std::string colorname = "?";
+	const std::string basetag = "?";
 	std::string logtag = "?";
 };
 }
