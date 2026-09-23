@@ -22,10 +22,12 @@ void QueriesProcessor::popQuery(PlayerColor player, QueryPtr query)
 			player.getNum(), query->toString().c_str());
 		for(const auto & q : queries[player])
 			fprintf(stderr, "  [ML-q]   stack: %s\n", q->toString().c_str());
+		fprintf(stderr, "[ML-stk] POP-FAIL player=%d depth=%d %s\n", player.getNum(), (int)queries[player].size(), query->toString().c_str());
 		return;
 	}
 
 	queries[player] -= query;
+	fprintf(stderr, "[ML-stk] POP player=%d depth=%d %s\n", player.getNum(), (int)queries[player].size(), query->toString().c_str());
 	auto nextQuery = topQuery(player);
 
 	query->onRemoval(player);
@@ -77,6 +79,22 @@ void QueriesProcessor::addQuery(PlayerColor player, QueryPtr query)
 	LOG_TRACE_PARAMS(logGlobal, "player='%d', query='%s'", player.getNum() % query);
 	query->onAdding(player);
 	queries[player].push_back(query);
+	fprintf(stderr, "[ML-stk] PUSH player=%d depth=%d %s\n", player.getNum(), (int)queries[player].size(), query->toString().c_str());
+}
+
+void QueriesProcessor::setListener(IQueryStackListener * listener)
+{
+	queriesStackListener = listener;
+}
+
+int QueriesProcessor::countQuery(const QueryPtr & query) const
+{
+	int count = 0;
+	for(const auto & playerQueries : queries)
+		for(const auto & q : playerQueries)
+			if(q == query)
+				count++;
+	return count;
 }
 
 QueryPtr QueriesProcessor::topQuery(PlayerColor player)
@@ -100,6 +118,7 @@ void QueriesProcessor::removeQuery(QueryPtr query)
 		if(it != v.end())
 		{
 			v.erase(it);
+			fprintf(stderr, "[ML-stk] FORCE-REMOVE player=%d depth=%d %s\n", player.getNum(), (int)queries[player].size(), query->toString().c_str());
 			if(!removalDone)
 			{
 				query->onRemoval(player);
@@ -127,10 +146,14 @@ void QueriesProcessor::popIfTop(const CQuery & query)
 	{
 		auto top = topQuery(color);
 		if(top.get() == &query)
+		{
+			fprintf(stderr, "[ML-stk] POPIFTOP-HIT player=%d depth=%d %s\n", color.getNum(), (int)queries[color].size(), query.toString().c_str());
 			popQuery(color, top);
+		}
 		else
 		{
 			// ML debug (ring 6): popIfTop FAIL = blocking query on top
+			fprintf(stderr, "[ML-stk] POPIFTOP-FAIL player=%d depth=%d %s\n", color.getNum(), (int)queries[color].size(), query.toString().c_str());
 			fprintf(stderr, "[ML-q] popIfTop FAIL color=%d target=%s top=%s\n",
 				color.getNum(), query.toString().c_str(),
 				top ? top->toString().c_str() : "null");

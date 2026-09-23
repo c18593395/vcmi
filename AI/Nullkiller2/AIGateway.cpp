@@ -43,6 +43,9 @@ namespace NK2AI
 AIGateway::AIGateway()
 	:status(this)
 {
+	// ML fix (C8.5): 限制 TBB 并行线程数 — NK2 多线程规划占内存巨大 (单局 5.5GB+),
+	// WSL 6GB 限制下 OOM 崩溃。限 4 线程降内存 (训练场景足够)。
+	static tbb::global_control g_tbb_ctl(tbb::global_control::max_allowed_parallelism, 4);
 	LOG_TRACE(logAi);
 	destinationTeleport = ObjectInstanceID();
 	destinationTeleportPos = int3(-1);
@@ -734,9 +737,12 @@ bool AIGateway::makePossibleUpgrades(const CArmedInstance * obj)
 		if(const CStackInstance * s = obj->getStackPtr(SlotID(i)))
 		{
 			UpgradeInfo upgradeInfo(s->getId());
+			int _mlUpgLoop = 0; // ML probe/circuit-breaker (09-23, #298)
 			do
 			{
 				cc->fillUpgradeInfo(obj, SlotID(i), upgradeInfo);
+				++_mlUpgLoop;
+				if(_mlUpgLoop <= 10) fprintf(stderr, "[ML-upg] loop slot=%d n=%d hasUpgrades=%d\n", i, _mlUpgLoop, (int)upgradeInfo.hasUpgrades());
 
 				if(upgradeInfo.hasUpgrades())
 				{
@@ -760,7 +766,8 @@ bool AIGateway::makePossibleUpgrades(const CArmedInstance * obj)
 						break;
 				}
 			}
-			while(upgradeInfo.hasUpgrades());
+			while(_mlUpgLoop < 8 && upgradeInfo.hasUpgrades());
+			if(_mlUpgLoop >= 8) fprintf(stderr, "[ML-upg] BREAK slot=%d n=%d (client/server upgrade state divergence)\n", i, _mlUpgLoop);
 		}
 	}
 
@@ -1527,7 +1534,8 @@ void AIStatus::addQuery(QueryID ID, std::string description)
 
 void AIStatus::removeQuery(QueryID ID)
 {
-	std::unique_lock<std::mutex> lock(mx);
+	// a1ea3f4d2d 摘取 (09-06): 锁移至 receivedAnswerConfirmation — 本函数现要求调用方持锁
+	// (全树唯一调用点 = receivedAnswerConfirmation L1602, 已持锁; 其余容器访问点各自持锁)
 	assert(vstd::contains(remainingQueries, ID));
 
 	std::string description = remainingQueries[ID];
@@ -1601,6 +1609,9 @@ void AIStatus::attemptedAnsweringQuery(QueryID queryID, int answerRequestID)
 
 void AIStatus::receivedAnswerConfirmation(int answerRequestID, int result)
 {
+	// a1ea3f4d2d 摘取 (09-06): 官方并发 race 修复 — 本函数此前裸跑访问 requestToQueryID/remainingQueries,
+	// 与其他线程 addQuery/waitTillFree 等持锁访问并发 → NK2 死锁链/battle-query-hang 同区隐患
+	std::unique_lock<std::mutex> lock(mx);
 	assert(vstd::contains(requestToQueryID, answerRequestID));
 	QueryID query = requestToQueryID[answerRequestID];
 	assert(vstd::contains(remainingQueries, query));

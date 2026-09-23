@@ -406,10 +406,8 @@ void BattleResultProcessor::endBattleConfirm(const CBattleInfoCallback & battle)
 	raccepted.winnerSide = finishingBattle->winnerSide;
 	gameHandler->sendAndApply(raccepted);
 
-	// ML fix (2026-08-17): popIfTop 仅栈顶语义, 被嵌套查询 (战利品/升级) 压住时永久 FAIL
-	// → 战斗查询残留 → "has to answer queries" 刷屏 → NK2 动作全拒 → 采集卡死。
-	// 改 removeQuery 任意位置强制移除 (battleQuery->result 已设置, onRemoval 执行 battleFinalize)。
-	gameHandler->queries->removeQuery(battleQuery);
+			fprintf(stderr, "[ML-stk] caller=BR-battleResultAIcase\n");
+		gameHandler->queries->popIfTop(battleQuery); // Workaround to remove battle query for AI case. TODO Think of a cleaner solution.
 	//--> continuation (battleFinalize) occurs after level-up gameHandler->queries are handled or on removing query
 }
 

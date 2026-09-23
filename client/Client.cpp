@@ -8,6 +8,29 @@
  *
  */
 #include "StdInc.h"
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef NOGDI
+#define NOGDI
+#endif
+#ifndef NOUSER
+#define NOUSER
+#endif
+#ifndef NOKERNEL
+#define NOKERNEL
+#endif
+#ifndef NOSOUND
+#define NOSOUND
+#endif
+#include <windows.h> // [THREAD] 插桩 GetCurrentThreadId (09-09)
+#else
+static inline unsigned long GetCurrentThreadId() { return 0; }
+#endif
 #include "Global.h"
 #include "Client.h"
 
@@ -23,9 +46,13 @@
 #include "mapView/mapHandler.h"
 
 // 2026-08-01: 跨 .so 直传 red 冒险 AI 名 (MLClient.cpp 定义, settings 写读层不一致绕过)
-// 2026-08-17: weak 定义兜底 — vcmiclient (clientapp) 不链接 libmlclient.so,
-// 无 MLClient.cpp 的强定义 → 链接错误。weak 符号: ML 强定义优先, 客户端默认空 (走 settings)。
-extern "C" __attribute__((weak)) char g_adventure_allied_ai[64] = "";
+extern "C" {
+#ifdef ENABLE_ML
+    extern char g_adventure_allied_ai[64];
+#else
+    char g_adventure_allied_ai[64] = {0};  // ML 关闭时本地定义, 无写入方保持空
+#endif
+}
 
 #include "../lib/CConfigHandler.h"
 #include "../lib/GameLibrary.h"
@@ -319,18 +346,28 @@ void CClient::installNewPlayerInterface(std::shared_ptr<CGameInterface> gameInte
 
 void CClient::installNewBattleInterface(std::shared_ptr<CBattleGameInterface> battleInterface, PlayerColor color, bool needCallback)
 {
+	fprintf(stderr, "[DBG installNewBattleInterface] ENTER: color=%s needCallback=%d battleInterface=%p\n", color.toString().c_str(), needCallback, (void*)battleInterface.get());
 	battleints[color] = battleInterface;
+	fprintf(stderr, "[DBG installNewBattleInterface] battleints assigned OK\n");
 
 	if(needCallback)
 	{
 		logGlobal->trace("\tInitializing the battle interface for player %s", color.toString());
+		fprintf(stderr, "[DBG installNewBattleInterface] BEFORE make_shared CBattleCallback\n");
 		auto cbc = std::make_shared<CBattleCallback>(color, this);
+		fprintf(stderr, "[DBG installNewBattleInterface] CBattleCallback created OK: %p\n", (void*)cbc.get());
 		battleCallbacks[color] = cbc;
+		fprintf(stderr, "[DBG installNewBattleInterface] battleCallbacks assigned OK\n");
 
+		fprintf(stderr, "[DBG installNewBattleInterface] BEFORE playerEnvironments.at(%s)\n", color.toString().c_str());
 		auto &env = playerEnvironments.at(color);
+		fprintf(stderr, "[DBG installNewBattleInterface] env OK: %p\n", (void*)env.get());
 
+		fprintf(stderr, "[DBG installNewBattleInterface] BEFORE initBattleInterface\n");
 		battleInterface->initBattleInterface(env, cbc, aiCombatOptions);
+		fprintf(stderr, "[DBG installNewBattleInterface] initBattleInterface RETURNED OK\n");
 	}
+	fprintf(stderr, "[DBG installNewBattleInterface] EXIT OK\n");
 }
 
 void CClient::handlePack(CPackForClient & pack)
@@ -354,9 +391,14 @@ std::optional<BattleAction> CClient::makeSurrenderRetreatDecision(PlayerColor pl
 	return playerint[player]->makeSurrenderRetreatDecision(battleID, battleState);
 }
 
+// ML fix (09-23, #298): 网络线程标记定义 (由 CServerHandler::threadRunNetwork 置位)
+thread_local bool CClient::onNetworkThread = false;
+
 int CClient::sendRequest(const CPackForServer & request, PlayerColor player, bool waitTillRealize)
 {
 	ui32 requestID = requestCounter++;
+	if(std::string(typeid(request).name()).find("UpgradeCreature") != std::string::npos)
+		fprintf(stderr, "[ML-upg] UpgradeCreature req=%d waitTillRealize=%d onNetThread=%d\n", requestID, (int)waitTillRealize, (int)CClient::onNetworkThread);
 	logNetwork->trace("Sending a request \"%s\". It'll have an ID=%d.", typeid(request).name(), requestID);
 
 	waitingRequest.pushBack(requestID);
@@ -368,9 +410,19 @@ int CClient::sendRequest(const CPackForServer & request, PlayerColor player, boo
 
 	if(waitTillRealize)
 	{
-		logGlobal->trace("We'll wait till request %d is answered.\n", requestID);
-		auto gsUnlocker = vstd::makeUnlockSharedGuard(CGameState::mutex);
-		waitingRequest.waitWhileContains(requestID);
+		if(CClient::onNetworkThread)
+		{
+			// ML fix (09-23, #298): 网络线程内跳过等待 — PackageApplied(解除等待的唯一路径)
+			// 只能由本线程处理, 在此等待 = 自锁 (实锤: 红方 MMAI yourTurn 经 visitPlayerStartsTurn
+			// 在 runNetwork 线程同步执行 endTurn → 300s adventure_wait 超时 → 静默吞局)
+			fprintf(stderr, "[ML-fix] skip waitTillRealize on network thread: req=%d %s\n", requestID, typeid(request).name());
+		}
+		else
+		{
+			logGlobal->trace("We'll wait till request %d is answered.\n", requestID);
+			auto gsUnlocker = vstd::makeUnlockSharedGuard(CGameState::mutex);
+			waitingRequest.waitWhileContains(requestID);
+		}
 	}
 
 	return requestID;
@@ -481,29 +533,52 @@ void CClient::battleFinished(const BattleID & battleID)
 
 void CClient::startPlayerBattleAction(const BattleID & battleID, PlayerColor color)
 {
+	// 0909 插桩: 战斗 stack 轮转调用 (unlockGuard 临时放锁区间)
+	fprintf(stderr, "[THREAD] startPlayerBattleAction ENTER tid=%lu color=%d\n", GetCurrentThreadId(), color.getNum()); fflush(stderr);
 	if (battleints.count(color) == 0)
 		return; // not our combat in MP
 
 	auto battleint = battleints.at(color);
 
+	auto * battle = gameState().getBattle(battleID);
+	if (!battle)
+	{
+		fprintf(stderr, "[BTL-DBG] startPlayerBattleAction: getBattle(%d) == nullptr color=%d\n", battleID.getNum(), color.getNum());
+		return;
+	}
+	auto * stack = battle->battleGetStackByID(battle->activeStack, false);
+	if (!stack)
+	{
+		fprintf(stderr, "[BTL-DBG] startPlayerBattleAction: activeStack %d not found color=%d\n", (int)battle->activeStack, color.getNum());
+		return;
+	}
+
 	if (!battleint->human)
 	{
 		// we want to avoid locking gamestate and causing UI to freeze while AI is making turn
-		auto unlockInterface = vstd::makeUnlockGuard(ENGINE->interfaceMutex);
-		battleint->activeStack(battleID, gameState().getBattle(battleID)->battleGetStackByID(gameState().getBattle(battleID)->activeStack, false));
+		// headless: ENGINE 为 null (P22) — 无 UI 无需 unlock guard
+		if (ENGINE)
+		{
+			fprintf(stderr, "[THREAD] startPlayerBattleAction unlockGuard+activeStack tid=%lu\n", GetCurrentThreadId()); fflush(stderr);
+			auto unlockInterface = vstd::makeUnlockGuard(ENGINE->interfaceMutex);
+			battleint->activeStack(battleID, stack);
+			fprintf(stderr, "[THREAD] startPlayerBattleAction relock done tid=%lu\n", GetCurrentThreadId()); fflush(stderr);
+		}
+		else
+		{
+			battleint->activeStack(battleID, stack);
+		}
 	}
 	else
 	{
-		battleint->activeStack(battleID, gameState().getBattle(battleID)->battleGetStackByID(gameState().getBattle(battleID)->activeStack, false));
+		battleint->activeStack(battleID, stack);
 	}
+	fprintf(stderr, "[THREAD] startPlayerBattleAction EXIT tid=%lu\n", GetCurrentThreadId()); fflush(stderr);
 }
 
-void CClient::reinitScripting()
+void CClient::onNewSystemMessageReceived(const std::string & messageText)
 {
-	clientEventBus = std::make_unique<events::EventBus>();
-#if SCRIPTING_ENABLED
-	clientScripts.reset(new scripting::PoolImpl(this));
-#endif
+	logGlobal->info("System message: %s", messageText);
 }
 
 void CClient::removeGUI() const

@@ -8,6 +8,29 @@
  *
  */
 #include "StdInc.h"
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef NOGDI
+#define NOGDI
+#endif
+#ifndef NOUSER
+#define NOUSER
+#endif
+#ifndef NOKERNEL
+#define NOKERNEL
+#endif
+#ifndef NOSOUND
+#define NOSOUND
+#endif
+#include <windows.h> // [THREAD] 插桩 GetCurrentThreadId (09-09)
+#else
+static inline unsigned long GetCurrentThreadId() { return 0; }
+#endif
 #include "CServerHandler.h"
 
 #include "CPlayerInterface.h"
@@ -82,8 +105,13 @@ CServerHandler::~CServerHandler()
 	serverRunner.reset();
 	if (threadNetwork.joinable())
 	{
-		auto unlockInterface = vstd::makeUnlockGuard(ENGINE->interfaceMutex);
-		threadNetwork.join();
+		if (ENGINE)
+		{
+			auto unlockInterface = vstd::makeUnlockGuard(ENGINE->interfaceMutex);
+			threadNetwork.join();
+		}
+		else
+			threadNetwork.join();
 	}
 }
 
@@ -95,8 +123,13 @@ void CServerHandler::endNetwork()
 
 	if (threadNetwork.joinable())
 	{
-		auto unlockInterface = vstd::makeUnlockGuard(ENGINE->interfaceMutex);
-		threadNetwork.join();
+		if (ENGINE)
+		{
+			auto unlockInterface = vstd::makeUnlockGuard(ENGINE->interfaceMutex);
+			threadNetwork.join();
+		}
+		else
+			threadNetwork.join();
 	}
 }
 
@@ -121,6 +154,9 @@ CServerHandler::CServerHandler(AICombatOptions aiCombatOptions)
 void CServerHandler::threadRunNetwork()
 {
 	setThreadName("runNetwork");
+	CClient::onNetworkThread = true; // ML fix (09-23, #298): 网络线程标记
+	// 0909 插桩: 线程生命周期跟踪 (GUI 死锁排查: owner=已死线程 pthread 结构, 追谁持锁退出)
+	fprintf(stderr, "[THREAD] runNetwork ENTER tid=%lu\n", GetCurrentThreadId()); fflush(stderr);
 	logGlobal->info("Starting network thread");
 	try {
 		networkHandler->run();
@@ -130,10 +166,23 @@ void CServerHandler::threadRunNetwork()
 		// VCMI can run SDL methods on network thread, leading to usage of thread-local storage by SDL
 		// Such storage needs to be cleaned up manually for threads that were not created by SDL
 		SDL_TLSCleanup();
+		fprintf(stderr, "[THREAD] runNetwork EXIT(TerminationRequested) tid=%lu\n", GetCurrentThreadId()); fflush(stderr);
 		logGlobal->info("Terminating network thread");
 		return;
 	}
+	catch (const std::exception & e)
+	{
+		// 0910: exception escaping this thread hits SEH filter ("Disaster happened") and leaves a zombie process - log reason and exit cleanly instead
+		logGlobal->error("runNetwork thread terminated by exception: %s", e.what());
+		fprintf(stderr, "[THREAD] runNetwork THREW: %s tid=%lu\n", e.what(), GetCurrentThreadId()); fflush(stderr);
+	}
+	catch (...)
+	{
+		logGlobal->error("runNetwork thread terminated by unknown exception");
+		fprintf(stderr, "[THREAD] runNetwork THREW: unknown tid=%lu\n", GetCurrentThreadId()); fflush(stderr);
+	}
 	SDL_TLSCleanup();
+	fprintf(stderr, "[THREAD] runNetwork EXIT tid=%lu\n", GetCurrentThreadId()); fflush(stderr);
 	logGlobal->info("Ending network thread");
 }
 
@@ -232,7 +281,17 @@ void CServerHandler::connectToServer(const std::string & addr, const ui16 port)
 void CServerHandler::onConnectionFailed(const std::string & errorMessage)
 {
 	assert(getState() == EClientState::CONNECTING);
-	std::scoped_lock interfaceLock(ENGINE->interfaceMutex);
+	if (ENGINE)
+	{
+		std::scoped_lock interfaceLock(ENGINE->interfaceMutex);
+
+		if (!isServerLocal())
+		{
+			// remote server refused connection - show error message
+			setState(EClientState::NONE);
+			CInfoWindow::showInfoDialog(LIBRARY->generaltexth->translate("vcmi.mainMenu.serverConnectionFailed"), {});
+		}
+	}
 
 	if (isServerLocal())
 	{
@@ -240,26 +299,23 @@ void CServerHandler::onConnectionFailed(const std::string & errorMessage)
 		logNetwork->debug("\nCannot establish connection. %s. Retrying...", errorMessage);
 		networkHandler->createTimer(*this, std::chrono::milliseconds(100));
 	}
-	else
-	{
-		// remote server refused connection - show error message
-		setState(EClientState::NONE);
-		CInfoWindow::showInfoDialog(LIBRARY->generaltexth->translate("vcmi.mainMenu.serverConnectionFailed"), {});
-	}
 }
 
 void CServerHandler::onTimer()
 {
-	std::scoped_lock interfaceLock(ENGINE->interfaceMutex);
-
-	if(getState() == EClientState::CONNECTION_CANCELLED)
+	if (ENGINE)
 	{
-		logNetwork->info("Connection aborted by player!");
-		serverRunner->wait();
-		serverRunner.reset();
-		if (ENGINE->windows().topWindow<CSimpleJoinScreen>() != nullptr)
-			ENGINE->windows().popWindows(1);
-		return;
+		std::scoped_lock interfaceLock(ENGINE->interfaceMutex);
+
+		if(getState() == EClientState::CONNECTION_CANCELLED)
+		{
+			logNetwork->info("Connection aborted by player!");
+			serverRunner->wait();
+			serverRunner.reset();
+			if (ENGINE->windows().topWindow<CSimpleJoinScreen>() != nullptr)
+				ENGINE->windows().popWindows(1);
+			return;
+		}
 	}
 
 	assert(isServerLocal());
@@ -270,9 +326,13 @@ void CServerHandler::onConnectionEstablished(const NetworkConnectionPtr & netCon
 {
 	assert(getState() == EClientState::CONNECTING);
 
-	std::scoped_lock interfaceLock(ENGINE->interfaceMutex);
-
-	networkConnection = netConnection;
+	if (ENGINE)
+	{
+		std::scoped_lock interfaceLock(ENGINE->interfaceMutex);
+		networkConnection = netConnection;
+	}
+	else
+		networkConnection = netConnection;
 
 	logNetwork->info("Connection established");
 
@@ -292,7 +352,8 @@ void CServerHandler::applyPackOnLobbyScreen(CPackForLobby & pack)
 {
 	ApplyOnLobbyScreenNetPackVisitor visitor(*this, dynamic_cast<CLobbyScreen *>(SEL));
 	pack.visit(visitor);
-	ENGINE->windows().totalRedraw();
+	if (ENGINE)
+		ENGINE->windows().totalRedraw();
 }
 
 std::set<PlayerColor> CServerHandler::getHumanColors()
@@ -341,6 +402,71 @@ bool CServerHandler::isHost() const
 bool CServerHandler::isGuest() const
 {
 	return !logicConnection || hostClientId != logicConnection->connectionID;
+}
+
+bool CServerHandler::hasRemoteClientInLobby() const
+{
+	std::set<GameConnectionID> connectedClients;
+	for(const auto & playerEntry : playerNames)
+		connectedClients.insert(playerEntry.second.connection);
+
+	return connectedClients.size() > 1;
+}
+
+void CServerHandler::stopNetwork()
+{
+	networkHandler->stop();
+}
+
+void CServerHandler::startLobbyPreview(const std::string & addr, ui16 port, std::function<void()> onJoin)
+{
+	lobbyPreviewMode = true;
+	onLobbyPreviewJoin = std::move(onJoin);
+	connectToServer(addr, port);
+}
+
+void CServerHandler::onLobbyPreviewResponse(LobbyModsCheck & pack)
+{
+	lobbyPreviewMode = false;
+
+	// Close the temporary query connection
+	if(networkConnection)
+	{
+		networkConnection->close();
+		networkConnection.reset();
+	}
+	logicConnection.reset();
+
+	GlobalLobbyRoom roomDescription;
+	roomDescription.gameVersion = pack.vcmiVersion;
+	roomDescription.statusID = "open";
+	roomDescription.playerLimit = 8;
+	roomDescription.modList = pack.mods;
+	roomDescription.hostAccountDisplayName = pack.hostAccountDisplayName;
+	roomDescription.description = "";
+
+	for(const auto & name : pack.participantNames)
+	{
+		GlobalLobbyAccount account;
+		account.displayName = name;
+		roomDescription.participants.push_back(account);
+	}
+
+	ENGINE->windows().createAndPushWindow<GlobalLobbyRoomWindow>(
+		roomDescription,
+		[this]()
+		{
+			ENGINE->windows().popWindows(1);
+			if(onLobbyPreviewJoin)
+				onLobbyPreviewJoin();
+		},
+		[]()
+		{
+			ENGINE->windows().popWindows(1);
+			// Also close the CSimpleJoinScreen that was underneath the preview
+			if(auto w = ENGINE->windows().topWindow<CSimpleJoinScreen>())
+				ENGINE->windows().popWindows(1);
+		});
 }
 
 const std::string & CServerHandler::getLocalHostname() const
@@ -658,7 +784,8 @@ void CServerHandler::startGameplay(std::shared_ptr<CGameState> gameState)
 		throw std::runtime_error("Invalid mode");
 	}
 
-	ENGINE->discord().setPlayingStatus(si, &gameState->getMap(), howManyPlayerInterfaces());
+	if (ENGINE)
+		ENGINE->discord().setPlayingStatus(si, &gameState->getMap(), howManyPlayerInterfaces());
 
 	// After everything initialized we can accept CPackToClient netpacks
 	setState(EClientState::GAMEPLAY);
@@ -945,27 +1072,46 @@ public:
 
 void CServerHandler::onPacketReceived(const std::shared_ptr<INetworkConnection> &, const std::vector<std::byte> & message)
 {
-	std::scoped_lock interfaceLock(ENGINE->interfaceMutex);
+	// 0909 插桩: 包处理入口/出口
+	fprintf(stderr, "[THREAD] onPacketReceived ENTER tid=%lu\n", GetCurrentThreadId()); fflush(stderr);
+	// 09-10 死锁修复: 锁必须覆盖整个包处理流程。
+	// 原实现锁只覆盖 DISCONNECTING 检查, 包处理无锁运行 → 深层 makeUnlockGuard 用户
+	// (如 CPlayerInterface::waitWhileDialog 的"解锁→等待→重锁"模式) 析构重锁后无人配对解锁
+	// → interfaceMutex 泄漏 → 下一个获取者(runNetwork 自身/主线程)永久冻结。
+	std::optional<std::unique_lock<GameEngine::LoggingMutex>> interfaceLock;
+	if (ENGINE)
+	{
+		interfaceLock.emplace(ENGINE->interfaceMutex);
 
-	if(getState() == EClientState::DISCONNECTING)
-		return;
+		if(getState() == EClientState::DISCONNECTING)
+		{
+			fprintf(stderr, "[THREAD] onPacketReceived EXIT(disc) tid=%lu\n", GetCurrentThreadId()); fflush(stderr);
+			return;
+		}
+	}
 
 	auto pack = logicConnection->retrievePack(message);
 	ServerHandlerCPackVisitor visitor(*this);
 	pack->visit(visitor);
+	fprintf(stderr, "[THREAD] onPacketReceived EXIT tid=%lu\n", GetCurrentThreadId()); fflush(stderr);
 }
 
 void CServerHandler::onDisconnected(const std::shared_ptr<INetworkConnection> & connection, const std::string & errorMessage)
 {
-	std::scoped_lock interfaceLock(ENGINE->interfaceMutex);
-
-	if (connection != networkConnection)
+	if (ENGINE)
 	{
-		// ServerHandler already closed this connection on its own
-		// This is the final call from network thread that informs serverHandler that connection has died
-		// ignore it since serverHandler have already shut down this connection (and possibly started a new one)
-		return;
+		std::scoped_lock interfaceLock(ENGINE->interfaceMutex);
+
+		if (connection != networkConnection)
+		{
+			// ServerHandler already closed this connection on its own
+			// This is the final call from network thread that informs serverHandler that connection has died
+			// ignore it since serverHandler have already shut down this connection (and possibly started a new one)
+			return;
+		}
 	}
+	else if (connection != networkConnection)
+		return;
 
 	waitForServerShutdown();
 

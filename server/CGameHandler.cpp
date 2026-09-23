@@ -47,11 +47,11 @@
 #include "../lib/entities/faction/CTownHandler.h"
 #include "../lib/entities/hero/CHeroHandler.h"
 
-#include "../lib/filesystem/FileInfo.h"
 #include "../lib/filesystem/Filesystem.h"
 
 #include "../lib/gameState/CGameState.h"
 #include "../lib/gameState/UpgradeInfo.h"
+#include "strategic_state.h"
 
 #include "../lib/mapping/CMap.h"
 #include "../lib/mapping/CMapService.h"
@@ -157,30 +157,16 @@ void CGameHandler::levelUpHero(const CGHeroInstance * hero)
 	hlu.primskill = primarySkill;
 	hlu.skills = randomizer->rollSecondarySkills(hero);
 
-	if (hlu.skills.size() == 0)
+	if (!hero->getOwner().isValidPlayer())
 	{
 		sendAndApply(hlu);
-		levelUpHero(hero);
-	}
-	else if (hlu.skills.size() == 1 || !hero->getOwner().isValidPlayer())
-	{
-		sendAndApply(hlu);
-		levelUpHero(hero, hlu.skills.front());
-	}
-	else if (hlu.skills.size() > 1)
-	{
-		// ML fix (2026-08-17): AI 玩家升级自动选第一个技能 (无头服务器模式, 同 showBlockingDialog)。
-		// NK2 heroGotLevel answerQuery 持 CGameState 共享锁与服务器写锁死锁 → 升级查询永不关闭
-		// → 压住 CBattleQuery → battleResultAccepted popIfTop FAIL → 战斗查询永久残留
-		// → "has to answer queries" 刷屏 19744 次 → NK2 动作全拒 → 采集卡死。
-		// AI 无需人工选技能: 直接取第一个并完成 (客户端模式 AI 独立进程自己答, 不受影响)。
-		const PlayerColor lvPlayer = hero->getOwner();
-		if(lvPlayer.isValidPlayer() && !gameInfo().getPlayerState(lvPlayer)->isHuman())
-		{
-			sendAndApply(hlu);
+		if(hlu.skills.empty())
+			levelUpHero(hero);
+		else
 			levelUpHero(hero, hlu.skills.front());
-			return;
-		}
+	}
+	else
+	{
 		auto levelUpQuery = std::make_shared<CHeroLevelUpDialogQuery>(this, hlu, hero);
 		queries->addQuery(levelUpQuery);
 		//level up will be called on query reply
@@ -782,19 +768,43 @@ void CGameHandler::start(bool resume)
 {
 	LOG_TRACE_PARAMS(logGlobal, "resume=%d", resume);
 
-#if SCRIPTING_ENABLED
-	services()->scripts()->run(serverScripts);
-#endif
-
 	if (!resume)
 	{
 		onNewTurn();
-		events::TurnStarted::defaultExecute(serverEventBus.get());
 		for(const auto & player : gameState().players)
 			turnTimerHandler->onGameplayStart(player.first);
 	}
-	else
-		events::GameResumed::defaultExecute(serverEventBus.get());
+
+	// [SRV-DIAG] P8-C: dump hero OI + owner + position so the external Python AI client
+	// can learn the runtime ObjectInstanceID without parsing the 171KB StartGame blob.
+	if (!resume)
+	{
+		for (const auto & heroID : gameState().getMap().getHeroesOnMap())
+		{
+			const CGHeroInstance * hero = gameInfo().getHero(heroID);
+			if (hero == nullptr)
+				continue;
+			fprintf(stderr, "[SRV-DIAG] HERO OI=%d owner=%d pos=%s\n",
+				heroID.getNum(),
+				hero->getOwner().getNum(),
+				hero->anchorPos().toString().c_str());
+		}
+		for (const auto & townID : gameState().getMap().getAllTowns())
+		{
+			const CGTownInstance * town = gameInfo().getTown(townID);
+			if (town == nullptr)
+				continue;
+			std::string creaturesStr;
+			for (const auto & creatureID : town->providedCreatures())
+				creaturesStr += std::to_string(creatureID.getNum()) + ",";
+			fprintf(stderr, "[SRV-DIAG] TOWN OI=%d owner=%d pos=%s creatures=%s\n",
+				townID.getNum(),
+				town->getOwner().getNum(),
+				town->anchorPos().toString().c_str(),
+				creaturesStr.c_str());
+		}
+		fflush(stderr);
+	}
 
 	turnOrder->onGameStarted();
 }
@@ -1032,6 +1042,7 @@ bool CGameHandler::moveHero(ObjectInstanceID hid, int3 dst, EMovementMode moveme
 			visitObjectOnTile(t, h);
 		}
 
+				fprintf(stderr, "[ML-stk] caller=CG-moveHeroTail\n");
 		queries->popIfTop(moveQuery);
 		logGlobal->trace("Hero %s ends movement", h->getNameTranslated());
 		return result != TryMoveHero::FAILED;
@@ -1196,12 +1207,13 @@ void CGameHandler::showBlockingDialog(const IObjectInterface * caller, BlockingD
 	// ML fix (2026-08-16): AI 玩家 blocking dialog 自动应答。
 	// 无头服务器 (vcmiserver) 里 AI (NK2) 的 answerQuery 任务需拿 CGameState::mutex
 	// shared_lock (AIGateway.cpp:1403), 与服务器持写锁等答案竞争 → 死锁 → query 永不答
-	// → 对象访问卡 (obj=1) → adventure_wait 超时。AI 无需人类选择: 答默认选项 0 并完成,
-	// 不发送给 AI 回调。仅无头服务器模式需要 (客户端模式 AI 独立进程自己答)。
+	// → 对象访问卡 (obj=1) → adventure_wait 超时 (8月1日遗留 dialog 卡死真正机制)。
+	// AI 无需人类选择: 直接答默认选项 0 并完成 query, 不发送给 AI 回调 (sendAndApply)。
 	const PlayerColor dialogPlayer = iw->player;
 	if(dialogPlayer.isValidPlayer() && !gameInfo().getPlayerState(dialogPlayer)->isHuman())
 	{
 		dialogQuery->setReply(0);
+				fprintf(stderr, "[ML-stk] caller=CG-answerDialog\n");
 		queries->popQuery(dialogQuery);
 		return;
 	}
@@ -1569,6 +1581,22 @@ void CGameHandler::heroExchange(ObjectInstanceID hero1, ObjectInstanceID hero2)
 
 	if (gameInfo().getPlayerRelations(h1->getOwner(), h2->getOwner()) != PlayerRelations::ENEMIES)
 	{
+		// ML fix (09-23, #298): AI 间英雄相遇不弹 ExchangeDialog 不建查询 (对齐
+		// makeGarrisonDialog 08-27 bothAI 同款模式)。NK2 应答走 executeActionAsync 异步
+		// (AIGateway.cpp:263), 主循环卡住时 answerQuery 永不下发 → Exchange 查询 q=1 恒挂
+		// → 蓝方回合不推进 → adventure_wait 300s 强停 → traj=None 静默吞局 (h3m 池 batch1
+		// 三图 100+ 局零出现根因, py/_298_repro.sh 停训窗 5 局取证 4/4 全挂含 viking 对照)。
+		// AI 间军队/宝物合并放弃 (NK2 pickBestCreatures 不执行, 训练语义影响小);
+		// 学者技能交换保留 (官方: "Visits can still be useful ... Scholar")。
+		const auto * exP1 = gameInfo().getPlayerState(h1->getOwner());
+		const auto * exP2 = gameInfo().getPlayerState(h2->getOwner());
+		bool bothAI = exP1 && !exP1->isHuman() && exP2 && !exP2->isHuman();
+		if (bothAI)
+		{
+			useScholarSkill(hero1,hero2);
+			return;
+		}
+
 		auto exchange = std::make_shared<CGarrisonDialogQuery>(this, h1, h2);
 		ExchangeDialog hex;
 		hex.queryID = exchange->queryID;
@@ -3448,7 +3476,8 @@ bool CGameHandler::queryReply(QueryID qid, std::optional<int32_t> answer, Player
 	COMPLAIN_RET_FALSE_IF(!topQuery->endsByPlayerAnswer(), "This query cannot be ended by player's answer!");
 
 	topQuery->setReply(answer);
-	queries->popQuery(topQuery);
+			fprintf(stderr, "[ML-stk] caller=CG-answerQuery\n");
+		queries->popQuery(topQuery);
 	return true;
 }
 
@@ -3473,6 +3502,27 @@ void CGameHandler::showGarrisonDialog(ObjectInstanceID upobj, ObjectInstanceID h
 	assert(lowerArmy);
 	assert(upperArmy);
 
+	// ML fix (08-27): AI vs AI 自动合并残余军队, 不弹 garrison dialog (AI 弹 dialog -> 查询栈清理异常 -> 回合卡死)
+	if (upperArmy && lowerArmy)
+	{
+		const auto * upPlayer = upperArmy->getOwner().isValidPlayer() ? gameInfo().getPlayerState(upperArmy->getOwner()) : nullptr;
+		const auto * downPlayer = lowerArmy->getOwner().isValidPlayer() ? gameInfo().getPlayerState(lowerArmy->getOwner()) : nullptr;
+		bool bothAI = (!upPlayer || !upPlayer->isHuman()) && (!downPlayer || !downPlayer->isHuman());
+		if (bothAI)
+		{
+			for (auto i = upperArmy->stacks.begin(); i != upperArmy->stacks.end(); ++i)
+			{
+				try {
+					SlotID pos = lowerArmy->getSlotFor(i->second->getCreature());
+					if (pos.validSlot())
+						moveStack(StackLocation(upobj, i->first), StackLocation(hid, pos));
+				} catch(...) {}
+			}
+			removeAfterVisit(upobj);
+			return;
+		}
+	}
+
 	auto garrisonQuery = std::make_shared<CGarrisonDialogQuery>(this, upperArmy, lowerArmy);
 	queries->addQuery(garrisonQuery);
 
@@ -3485,6 +3535,7 @@ void CGameHandler::showGarrisonDialog(ObjectInstanceID upobj, ObjectInstanceID h
 	if(garrisonPlayer.isValidPlayer() && !gameInfo().getPlayerState(garrisonPlayer)->isHuman())
 	{
 		garrisonQuery->setReply(0);
+				fprintf(stderr, "[ML-stk] caller=CG-garrisonAnswer\n");
 		queries->popQuery(garrisonQuery);
 		return;
 	}
@@ -3598,58 +3649,43 @@ void CGameHandler::objectVisited(const CGObjectInstance * visitedObject, const C
 
 	std::shared_ptr<MapObjectVisitQuery> visitQuery;
 
-	auto startVisit = [&](ObjectVisitStarted & event)
+	if(visitedObject->ID == Obj::HERO)
 	{
-		const auto * visitedObject = obj;
+		const auto * visitedHero = dynamic_cast<const CGHeroInstance *>(visitedObject);
+		const auto * visitedTown = visitedHero->getVisitedTown();
 
-		if(obj->ID == Obj::HERO)
+		if(visitedTown)
 		{
-			const auto * visitedHero = dynamic_cast<const CGHeroInstance *>(obj);
-			const auto * visitedTown = visitedHero->getVisitedTown();
+			const bool isEnemy = visitedHero->getOwner() != h->getOwner();
 
-			if(visitedTown)
-			{
-				const bool isEnemy = visitedHero->getOwner() != h->getOwner();
-
-				if(isEnemy && !visitedTown->isBattleOutsideTown(visitedHero))
-					visitedObject = visitedTown;
-			}
+			if(isEnemy && !visitedTown->isBattleOutsideTown(visitedHero))
+				visitedObject = visitedTown;
 		}
-		visitQuery = std::make_shared<MapObjectVisitQuery>(this, visitedObject, h);
-		queries->addQuery(visitQuery); //TODO real visit pos
+	}
+	visitQuery = std::make_shared<MapObjectVisitQuery>(this, visitedObject, h);
+	queries->addQuery(visitQuery); //TODO real visit pos
 
-		HeroVisit hv;
-		hv.objId = obj->id;
-		hv.heroId = h->id;
-		hv.player = h->tempOwner;
-		hv.starting = true;
-		sendAndApply(hv);
+	HeroVisit hv;
+	hv.objId = visitedObject->id;
+	hv.heroId = h->id;
+	hv.player = h->tempOwner;
+	hv.starting = true;
+	sendAndApply(hv);
 
-		obj->onHeroVisit(*this, h);
-	};
-
-	ObjectVisitStarted::defaultExecute(serverEventBus.get(), startVisit, h->tempOwner, h->id, obj->id);
+	visitedObject->onHeroVisit(*this, h);
 
 	if(visitQuery)
+				fprintf(stderr, "[ML-stk] caller=CG-objectVisitedTail\n");
 		queries->popIfTop(visitQuery); //visit ends here if no queries were created
 }
 
 void CGameHandler::objectVisitEnded(const ObjectInstanceID & heroObjectID, PlayerColor player)
 {
-	using events::ObjectVisitEnded;
-
-	auto endVisit = [&](ObjectVisitEnded & event)
-	{
-		HeroVisit hv;
-		hv.player = event.getPlayer();
-		hv.heroId = event.getHero();
-		hv.starting = false;
-		sendAndApply(hv);
-	};
-
-	//TODO: ObjectVisitEnded should also have id of visited object,
-	//but this requires object being deleted only by `removeAfterVisit()` but not `removeObject()`
-	ObjectVisitEnded::defaultExecute(serverEventBus.get(), endVisit, player, heroObjectID);
+	HeroVisit hv;
+	hv.player = player;
+	hv.heroId = heroObjectID;
+	hv.starting = false;
+	sendAndApply(hv);
 }
 
 bool CGameHandler::buildBoat(ObjectInstanceID objid, PlayerColor playerID)
@@ -4297,6 +4333,9 @@ bool CGameHandler::isBlockedByQueries(const CPackForServer *pack, PlayerColor pl
 			% boost::to_upper_copy<std::string>(player.toString())
 			% query->toString()
 		));
+		#ifdef ENABLE_ML
+		throw std::runtime_error("throwing due to unanswered query");
+		#endif
 		return true;
 	}
 
