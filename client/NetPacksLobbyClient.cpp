@@ -103,6 +103,14 @@ void ApplyOnLobbyHandlerNetPackVisitor::visitLobbyClientDisconnected(LobbyClient
 	}
 }
 
+void ApplyOnLobbyScreenNetPackVisitor::visitLobbyClientConnected(LobbyClientConnected & pack)
+{
+	if(!lobby || pack.clientId == handler.logicConnection->connectionID)
+		return;
+
+	lobby->onRemoteClientLobbyStateChanged();
+}
+
 void ApplyOnLobbyScreenNetPackVisitor::visitLobbyClientDisconnected(LobbyClientDisconnected & pack)
 {
 	if(auto w = ENGINE->windows().topWindow<CLoadingScreen>())
@@ -192,6 +200,11 @@ void ApplyOnLobbyScreenNetPackVisitor::visitLobbyLoadProgress(LobbyLoadProgress 
 		w->tick(0);
 		w->redraw();
 	}
+}
+
+void ApplyOnLobbyHandlerNetPackVisitor::visitLobbyModsCheck(LobbyModsCheck & pack)
+{
+	handler.onLobbyPreviewResponse(pack);
 }
 
 void ApplyOnLobbyHandlerNetPackVisitor::visitLobbyUpdateState(LobbyUpdateState & pack)

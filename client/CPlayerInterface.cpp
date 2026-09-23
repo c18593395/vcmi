@@ -222,9 +222,9 @@ void CPlayerInterface::playerEndsTurn(PlayerColor player)
 		closeAllDialogs();
 
 		// remove all pending dialogs that do not expect query answer
-		vstd::erase_if(dialogs, [](const std::shared_ptr<CInfoWindow> & window){
-						   return window->ID == QueryID::NONE;
-					   });
+		vstd::erase_if(dialogs, [](const PendingDialog & dialog){
+					   return dialog.dropOnTurnEnd;
+				   });
 	}
 }
 
@@ -252,7 +252,7 @@ void CPlayerInterface::playerStartsTurn(PlayerColor player)
 void CPlayerInterface::performAutosave()
 {
 	int frequency = static_cast<int>(settings["general"]["saveFrequency"].Integer());
-	if(frequency > 0 && cb->getDate() % frequency == 0)
+	if(frequency > 0 && cb->getCalendar().getDayOfMonth() % frequency == 0)
 	{
 		bool usePrefix = settings["general"]["useSavePrefix"].Bool();
 		std::string prefix = std::string();
@@ -290,9 +290,9 @@ void CPlayerInterface::performAutosave()
 		}
 		else
 		{
-			std::string stringifiedDate = std::to_string(cb->getDate(Date::MONTH))
-					+ std::to_string(cb->getDate(Date::WEEK))
-					+ std::to_string(cb->getDate(Date::DAY_OF_WEEK));
+			std::string stringifiedDate = std::to_string(cb->getCalendar().getMonth())
+					+ std::to_string(cb->getCalendar().getWeek())
+					+ std::to_string(cb->getCalendar().getDayOfWeek());
 
 			cb->save("Saves/Autosave/" + prefix + stringifiedDate, false);
 		}
@@ -695,18 +695,6 @@ void CPlayerInterface::battleUnitsChanged(const BattleID & battleID, const std::
 	{
 		switch(info.operation)
 		{
-		case UnitChanges::EOperation::RESET_STATE:
-			{
-				const CStack * stack = cb->getBattle(battleID)->battleGetStackByID(info.id );
-
-				if(!stack)
-				{
-					logGlobal->error("Invalid unit ID %d", info.id);
-					continue;
-				}
-				battleInt->stackReset(stack);
-			}
-			break;
 		case UnitChanges::EOperation::REMOVE:
 			battleInt->stackRemoved(info.id);
 			break;
@@ -1055,7 +1043,7 @@ void CPlayerInterface::showInfoDialog(const std::string &text, const std::vector
 	}
 	else
 	{
-		dialogs.push_back(temp);
+		dialogs.push_back(PendingDialog{false, [temp](){ ENGINE->windows().pushWindow(temp); }});
 	}
 }
 
@@ -1270,7 +1258,7 @@ void CPlayerInterface::moveHero( const CGHeroInstance *h, const CGPath& path )
 	movementController->requestMovementStart(h, path);
 }
 
-void CPlayerInterface::showGarrisonDialog( const CArmedInstance *up, const CGHeroInstance *down, bool removableUnits, QueryID queryID)
+void CPlayerInterface::showGarrisonDialog( const CArmedInstance *up, const CGHeroInstance *down, bool removableUnits, QueryID queryID, const MetaString & customTitle)
 {
 	EVENT_HANDLER_CALLED_BY_CLIENT;
 	auto onEnd = [this, queryID](){ cb->selectionMade(0, queryID); };
@@ -1283,7 +1271,7 @@ void CPlayerInterface::showGarrisonDialog( const CArmedInstance *up, const CGHer
 
 	waitForAllDialogs();
 
-	auto cgw = std::make_shared<CGarrisonWindow>(up, down, removableUnits);
+	auto cgw = std::make_shared<CGarrisonWindow>(up, down, removableUnits, customTitle);
 	cgw->quit->addCallback(onEnd);
 	ENGINE->windows().pushWindow(cgw);
 }
@@ -1513,7 +1501,7 @@ void CPlayerInterface::update()
 	if (makingTurn && !dialogs.empty() && !showingDialog->isBusy())
 	{
 		showingDialog->setBusy();
-		ENGINE->windows().pushWindow(dialogs.front());
+		dialogs.front().show();
 		dialogs.pop_front();
 	}
 }
@@ -1883,7 +1871,7 @@ bool CPlayerInterface::capturedAllEvents()
 void CPlayerInterface::prepareAutoFightingAI(const BattleID &bid, const CCreatureSet *army1, const CCreatureSet *army2, int3 tile, const CGHeroInstance *hero1, const CGHeroInstance *hero2, BattleSide side)
 {
 	aiCombatOptions.enableSpellsUsage = settings["battle"]["enableAutocombatSpells"].Bool();
-	autofightingAI = CDynLibHandler::getNewBattleAI(settings["server"]["combatAlliedAI"].String());
+	autofightingAI = CDynLibHandler::getNewBattleAI(settings["ai"]["combatAlliedAI"].String());
 	autofightingAI->initBattleInterface(env, cb, aiCombatOptions);
 	autofightingAI->battleStart(bid, army1, army2, tile, hero1, hero2, side, false);
 	isAutoFightOn = true;

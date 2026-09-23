@@ -9,7 +9,9 @@ set(serverapp_HEADERS
 
 assign_source_group(${serverapp_SRCS} ${serverapp_HEADERS})
 add_executable(vcmiserver ${serverapp_SRCS} ${serverapp_HEADERS})
-vcmi_create_exe_shim(vcmiserver)
+if(USING_CONAN)
+	vcmi_copy_conan_runtime_deps(vcmiserver)
+endif()
 
 set(serverapp_LIBS vcmi)
 if(CMAKE_SYSTEM_NAME MATCHES FreeBSD OR HAIKU)
@@ -17,10 +19,22 @@ if(CMAKE_SYSTEM_NAME MATCHES FreeBSD OR HAIKU)
 endif()
 
 if(ENABLE_ML)
-	set(serverapp_LIBS mlserverplugin ${serverapp_LIBS})
+	find_package(Python REQUIRED COMPONENTS Development)
+	set(serverapp_LIBS mlclient mlserverplugin ${serverapp_LIBS})
+	# Force Python lib at the end of link line (after libvcmi.so)
+	# Using INTERFACE library to prevent CMake reordering
+	add_library(python_fix INTERFACE)
+	target_link_libraries(python_fix INTERFACE Python::Python)
 endif()
 
-target_link_libraries(vcmiserver PRIVATE ${serverapp_LIBS} minizip::minizip vcmiservercommon)
+# 09-10: 重复追加 vcmi 到行尾 — MinGW ld 从左到右解析, servercommon 新增的 lib 符号引用
+# 需要 import lib 位于 vcmiservercommon.a 之后 (Windows 链接序修复)
+target_link_libraries(vcmiserver PRIVATE ${serverapp_LIBS} minizip::minizip vcmiservercommon vcmi)
+
+if(ENABLE_ML)
+	# Force Python to end of link line to resolve PyGILState from libvcmi.so
+	target_link_libraries(vcmiserver PRIVATE python_fix)
+endif()
 
 target_include_directories(vcmiserver
 	PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}

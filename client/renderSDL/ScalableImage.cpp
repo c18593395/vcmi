@@ -367,7 +367,7 @@ void ScalableImageInstance::draw(SDL_Surface * where, const Point & pos, const R
 {
 	if (scaledImage)
 		scaledImage->draw(where, pos, src, scalingFactor);
-	else
+	else if (image)
 		image->draw(where, pos, src, parameters, scalingFactor);
 }
 

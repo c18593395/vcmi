@@ -10,7 +10,6 @@
 #include "StdInc.h"
 #include "GraphPaths.h"
 #include "AIPathfinderConfig.h"
-#include "../../../lib/CRandomGenerator.h"
 #include "../../../lib/mapObjects/CQuest.h"
 #include "../../../lib/mapping/CMap.h"
 #include "../Engine/Nullkiller.h"
@@ -204,8 +203,7 @@ void GraphPaths::addChainInfo(std::vector<AIPath> & paths, int3 tile, const CGHe
 
 		uint64_t danger = node.linkDanger;
 		float cost = node.cost;
-		bool allowBattle = false;
-
+		bool hasDangerousGraphTransition = false;
 		auto current = GraphPathNodePointer(nodes->first, node.nodeType);
 
 		while(true)
@@ -220,7 +218,7 @@ void GraphPaths::addChainInfo(std::vector<AIPath> & paths, int3 tile, const CGHe
 			if(!currentNode.previous.valid())
 				break;
 
-			allowBattle = allowBattle || currentNode.nodeType == GrapthPathNodeType::BATTLE;
+			hasDangerousGraphTransition = hasDangerousGraphTransition || currentNode.nodeType == GrapthPathNodeType::BATTLE;
 			vstd::amax(danger, currentNode.linkDanger);
 			vstd::amax(cost, currentNode.cost);
 
@@ -291,7 +289,10 @@ void GraphPaths::addChainInfo(std::vector<AIPath> & paths, int3 tile, const CGHe
 			}
 
 			path.armyLoss += loss;
-			path.targetObjectDanger = aiNk->dangerEvaluator->evaluateDanger(tile, path.targetHero, !allowBattle);
+			// TODO: Preserve endpoint visit semantics in graph paths so this can distinguish visit actions
+			// from true target-tile guard checks instead of relying on graph transition type.
+			const bool checkTargetTileGuards = !hasDangerousGraphTransition;
+			path.targetObjectDanger = aiNk->dangerEvaluator->evaluateDanger(tile, path.targetHero, checkTargetTileGuards);
 			// TODO: Mircea: This is similar same as 263, so what's happening here? Why strength is passed differently?
 			path.targetObjectArmyLoss = aiNk->pathfinder->getStorage()->evaluateArmyLoss(path.targetHero, path.heroArmy->getArmyStrength(), path.targetObjectDanger);
 
@@ -316,8 +317,7 @@ void GraphPaths::quickAddChainInfoWithBlocker(std::vector<AIPath> & paths, int3 
 
 		uint64_t danger = targetNode.linkDanger;
 		float cost = targetNode.cost;
-		bool allowBattle = false;
-
+		bool hasDangerousGraphTransition = false;
 		auto current = GraphPathNodePointer(nodes->first, targetNode.nodeType);
 
 		while(true)
@@ -329,7 +329,7 @@ void GraphPaths::quickAddChainInfoWithBlocker(std::vector<AIPath> & paths, int3 
 
 			auto currentNode = currentTile->second[current.nodeType];
 
-			allowBattle = allowBattle || currentNode.nodeType == GrapthPathNodeType::BATTLE;
+			hasDangerousGraphTransition = hasDangerousGraphTransition || currentNode.nodeType == GrapthPathNodeType::BATTLE;
 			vstd::amax(danger, currentNode.linkDanger);
 			vstd::amax(cost, currentNode.cost);
 
@@ -357,7 +357,10 @@ void GraphPaths::quickAddChainInfoWithBlocker(std::vector<AIPath> & paths, int3 
 			path.heroArmy = entryPath.heroArmy;
 			path.exchangeCount = entryPath.exchangeCount;
 			path.armyLoss = entryPath.armyLoss + aiNk->pathfinder->getStorage()->evaluateArmyLoss(path.targetHero, path.heroArmy->getArmyStrength(), danger);
-			path.targetObjectDanger = aiNk->dangerEvaluator->evaluateDanger(tile, path.targetHero, !allowBattle);
+			// TODO: Preserve endpoint visit semantics in graph paths so this can distinguish visit actions
+			// from true target-tile guard checks instead of relying on graph transition type.
+			const bool checkTargetTileGuards = !hasDangerousGraphTransition;
+			path.targetObjectDanger = aiNk->dangerEvaluator->evaluateDanger(tile, path.targetHero, checkTargetTileGuards);
 			path.targetObjectArmyLoss = aiNk->pathfinder->getStorage()->evaluateArmyLoss(path.targetHero, path.heroArmy->getArmyStrength(), path.targetObjectDanger);
 
 			AIPathNodeInfo n;

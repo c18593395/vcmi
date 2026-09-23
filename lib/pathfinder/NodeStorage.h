@@ -13,23 +13,26 @@
 #include "CGPathNode.h"
 
 VCMI_LIB_NAMESPACE_BEGIN
+struct TeamState;
 
 class DLL_LINKAGE NodeStorage : public INodeStorage
 {
 private:
 	CPathsInfo & out;
+	const IGameInfoCallback * gameInfo = nullptr;
+	const TeamState * playerTeam = nullptr;
+	PlayerColor player;
+	bool useFlying = false;
+	bool useWaterWalking = false;
 
-	STRONG_INLINE
+	inline
 	void resetTile(const int3 & tile, const EPathfindingLayer & layer, EPathAccessibility accessibility);
+
+	CGPathNode * getNode(const int3 & coord, const EPathfindingLayer & layer);
+	EPathAccessibility evaluateAccessibility(const int3 & coord, const EPathfindingLayer & layer) const;
 
 public:
 	NodeStorage(CPathsInfo & pathsInfo, const CGHeroInstance * hero);
-
-	STRONG_INLINE
-	CGPathNode * getNode(const int3 & coord, const EPathfindingLayer layer)
-	{
-		return out.getNode(coord, layer);
-	}
 
 	void initialize(const PathfinderOptions & options, const IGameInfoCallback & gameInfo) override;
 	virtual ~NodeStorage() = default;

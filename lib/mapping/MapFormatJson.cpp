@@ -32,11 +32,11 @@
 #include "../mapObjects/MiscObjects.h"
 #include "../modding/ModScope.h"
 #include "../modding/ModUtility.h"
-#include "../spells/CSpellHandler.h"
 #include "../CSkillHandler.h"
 #include "../constants/StringConstants.h"
 #include "../serializer/JsonDeserializer.h"
 #include "../serializer/JsonSerializer.h"
+#include "../spells/CSpellHandler.h"
 #include "../json/JsonUtils.h"
 #include "../texts/Languages.h"
 #include "../texts/CGeneralTextHandler.h"
@@ -123,12 +123,13 @@ namespace HeaderDetail
 
 namespace TriggeredEventsDetail
 {
-	static const std::array conditionNames =
-	{
-		"haveArtifact", "haveCreatures",   "haveResources",   "haveBuilding",
-		"control",      "destroy",         "transport",       "daysPassed",
-		"isHuman",      "daysWithoutTown", "standardWin",     "constValue"
-	};
+		static const std::array conditionNames =
+		{
+			"haveArtifact", "haveCreatures",   "haveResources",   "haveBuilding",
+			"control",      "destroy",         "transport",       "daysPassed",
+			"isHuman",      "daysWithoutTown", "standardWin",     "constValue",
+			"controlCurrent"
+		};
 
 	static const std::array typeNames = { "victory", "defeat" };
 
@@ -177,6 +178,7 @@ namespace TriggeredEventsDetail
 						event.objectType = BuildingID(BuildingID::decode(data["type"].String()));
 					break;
 				case EventCondition::CONTROL:
+					case EventCondition::CONTROL_CURRENT:
 				case EventCondition::DESTROY:
 					if (data["type"].isNumber()) // compatibility
 						event.objectType = MapObjectID(data["type"].Integer());
@@ -764,46 +766,14 @@ void CMapFormatJson::serializeTimedEvents(JsonSerializeFormat & handler)
 
 void CMapFormatJson::serializePredefinedHeroes(JsonSerializeFormat & handler)
 {
-	if(handler.saving)
-	{
-		auto heroPool = map->getHeroesInPool();
-		if(!heroPool.empty())
-		{
-			auto predefinedHeroes = handler.enterStruct("predefinedHeroes");
-
-			for(auto & heroID : heroPool)
-			{
-				auto heroPtr = map->tryGetFromHeroPool(heroID);
-				auto predefinedHero = handler.enterStruct(heroPtr->getHeroTypeName());
-
-				heroPtr->serializeJsonDefinition(handler);
-			}
-		}
-	}
-	else
-	{
-		auto predefinedHeroes = handler.enterStruct("predefinedHeroes");
-
-		const JsonNode & data = handler.getCurrent();
-
-		for(const auto & p : data.Struct())
-		{
-			auto predefinedHero = handler.enterStruct(p.first);
-
-			auto hero = std::make_shared<CGHeroInstance>(map->cb);
-			hero->ID = Obj::HERO;
-			hero->setHeroTypeName(p.first);
-			hero->serializeJsonDefinition(handler);
-
-			map->addToHeroPool(hero);
-		}
-	}
+    // An option to create custom map heroes like in SoD - currently not ready in the editor.
+    // There was an implementation that caused bugs, look at file history if you need it.
 }
 
 void CMapFormatJson::serializeOptions(JsonSerializeFormat & handler)
 {
 	serializeRumors(handler);
-	
+
 	serializeTimedEvents(handler);
 
 	serializePredefinedHeroes(handler);
@@ -819,7 +789,6 @@ void CMapFormatJson::serializeOptions(JsonSerializeFormat & handler)
 
 void CMapFormatJson::readOptions(JsonDeserializer & handler)
 {
-	readDisposedHeroes(handler);
 	serializeOptions(handler);
 }
 
@@ -953,7 +922,7 @@ void CMapLoaderJson::readHeader(const bool complete)
 	}
 
 	mapHeader->version = EMapFormat::VCMI;//todo: new version field
-	
+
 	//loading mods
 	mapHeader->mods = ModVerificationInfo::jsonDeserializeList(header["mods"]);
 
@@ -1016,6 +985,8 @@ void CMapLoaderJson::readHeader(const bool complete)
 	//TODO: check mods
 
 	mapHeader->battleOnly = header["battleOnly"].Bool();
+
+	readDisposedHeroes(handler);
 
 	if(complete)
 		readOptions(handler);
@@ -1313,15 +1284,15 @@ void CMapLoaderJson::readTranslations()
 		if(isExistArchive(language.identifier + ".json"))
 			translationsFromFile.Struct()[language.identifier] = getFromArchive(language.identifier + ".json");
 	}
-	
+
 	// Register translations with map name prefix
 	if(!translationsFromFile.Struct().empty())
 	{
 		std::string actualMapName = TextOperations::convertMapName(mapName);
-		
+
 		std::string preferredLanguage = CGeneralTextHandler::getPreferredLanguage();
 		std::string baseLanguage = Languages::getLanguageOptions(Languages::ELanguages::ENGLISH).identifier;
-		
+
 		// Determine base language from translations with most strings
 		int maxStrings = 0;
 		for(auto & translation : translationsFromFile.Struct())
@@ -1332,14 +1303,14 @@ void CMapLoaderJson::readTranslations()
 				baseLanguage = translation.first;
 			}
 		}
-		
+
 		// Load base language translations
 		if(translationsFromFile.Struct().count(baseLanguage))
 		{
 			for(auto & str : translationsFromFile[baseLanguage].Struct())
 			{
 				// Keys in JSON don't have map name (e.g. "header.name"), add map name when registering: map.<mapName>.<identifier>
-				TextIdentifier fullIdentifier = runningInMapEditor 
+				TextIdentifier fullIdentifier = runningInMapEditor
 					? TextIdentifier(str.first)
 					: TextIdentifier("map", actualMapName, str.first);
 				mapRegisterLocalizedString("map", *mapHeader, fullIdentifier, str.second.String(), baseLanguage);
@@ -1352,7 +1323,7 @@ void CMapLoaderJson::readTranslations()
 			JsonNode translationOverrides;
 			for(auto & str : translationsFromFile[preferredLanguage].Struct())
 			{
-				TextIdentifier fullIdentifier = runningInMapEditor 
+				TextIdentifier fullIdentifier = runningInMapEditor
 					? TextIdentifier(str.first)
 					: TextIdentifier("map", actualMapName, str.first);
 				translationOverrides.Struct()[fullIdentifier.get()].String() = str.second.String();

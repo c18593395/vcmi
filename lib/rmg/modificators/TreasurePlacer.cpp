@@ -30,9 +30,10 @@
 #include "../../mapObjects/CQuest.h"
 #include "../../mapObjects/MiscObjects.h"
 #include "../../CCreatureHandler.h"
-#include "../../spells/CSpellHandler.h" //for choosing random spells
 #include "../../mapping/CMap.h"
 #include "../../mapping/CMapEditManager.h"
+#include "../../spells/CSpellHandler.h"
+
 
 #include <vstd/RNG.h>
 
@@ -962,7 +963,7 @@ void TreasurePlacer::createTreasures(ObjectManager& manager)
 
 	//place biggest treasures first at large distance, place smaller ones inbetween
 	auto treasureInfo = zone.getTreasureInfo();
-	boost::sort(treasureInfo, valueComparator);
+	std::ranges::sort(treasureInfo, valueComparator);
 
 	//sort treasures by ascending value so we can stop checking treasures with too high value
 	objects.sortPossibleObjects();
@@ -1226,7 +1227,7 @@ std::vector<ObjectInfo> & TreasurePlacer::ObjectPool::getPossibleObjects()
 
 void TreasurePlacer::ObjectPool::sortPossibleObjects()
 {
-	boost::sort(possibleObjects, [](const ObjectInfo& oi1, const ObjectInfo& oi2) -> bool
+	std::ranges::sort(possibleObjects, [](const ObjectInfo& oi1, const ObjectInfo& oi2) -> bool
 	{
 		return oi1.value < oi2.value;
 	});
@@ -1252,8 +1253,7 @@ ObjectConfig::EObjectCategory TreasurePlacer::ObjectPool::getObjectCategory(Comp
 			return ObjectConfig::EObjectCategory::NONE;
 		}
 
-		auto temp = handler->getTemplates().front();
-		auto info = handler->getObjectInfo(temp);
+		auto info = handler->getObjectInfo();
 
 		if (info->hasGuards())
 		{

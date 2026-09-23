@@ -28,15 +28,15 @@ bool CCallback::teleportHero(const CGHeroInstance *who, const CGTownInstance *wh
 	return true;
 }
 
-void CCallback::moveHero(const CGHeroInstance *h, const int3 & destination, bool transit)
+void CCallback::moveHero(const CGHeroInstance *h, const int3 & destination, bool transit, const EPathfindingLayer & layer)
 {
-	MoveHero pack({destination}, h->id, transit);
+	MoveHero pack({destination}, layer, h->id, transit);
 	sendRequest(pack);
 }
 
-void CCallback::moveHero(const CGHeroInstance *h, const std::vector<int3> & path, bool transit)
+void CCallback::moveHero(const CGHeroInstance *h, const std::vector<int3> & path, bool transit, const EPathfindingLayer & layer)
 {
-	MoveHero pack(path, h->id, transit);
+	MoveHero pack(path, layer, h->id, transit);
 	sendRequest(pack);
 }
 
@@ -50,11 +50,8 @@ int CCallback::sendQueryReply(std::optional<int32_t> reply, QueryID queryID)
 	ASSERT_IF_CALLED_WITH_PLAYER
 	if(queryID == QueryID(-1))
 	{
-		logGlobal->warn("Attempted to answer a notification (queryID==-1), ignoring.");
-		// queryID == -1 means this is a notification, not an actual query
-		// (see NetPacksBase.h: "equals to -1 if it is not an actual query")
-		// Do NOT send a reply for notifications - just return success.
-		return 0;
+		logGlobal->error("Cannot answer the query -1!");
+		return -1;
 	}
 
 	QueryReply pack(queryID, reply);

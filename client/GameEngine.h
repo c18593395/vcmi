@@ -67,7 +67,16 @@ private:
 	void drawPerformanceOverlay(); // draws box with additional infos (e.g. fps)
 
 public:
-	std::mutex interfaceMutex;
+	// 09-10: 死锁诊断 — interfaceMutex 包装器, 锁操作打点 (实现 GameEngine.cpp)
+	// 正常 std::mutex (winpthreads Normal 不记录 owner), 冻结时无法从 dump 定位持锁者 → 运行时日志
+	class LoggingMutex {
+		std::mutex m;
+	public:
+		void lock();
+		void unlock();
+		bool try_lock();
+	};
+	LoggingMutex interfaceMutex;
 
 	/// returns current position of mouse cursor, relative to vcmi window
 	const Point & getCursorPosition() const;
@@ -101,6 +110,10 @@ public:
 	bool isKeyboardCmdDown() const;
 	/// returns true if Shift is currently pressed down
 	bool isKeyboardShiftDown() const;
+
+	/// returns game data mode
+	bool isRoeData() const;
+	bool isDemoData() const;
 
 	IScreenHandler & screenHandler();
 	IRenderHandler & renderHandler();

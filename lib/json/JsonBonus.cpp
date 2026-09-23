@@ -286,7 +286,7 @@ static TBonusParametersPtr loadBonusAddInfo(BonusType type, const JsonNode & val
 					{ 'f', 1 }, { 'l', 6}, {'r', 2}, {'b', 4}
 				};
 				int converted = 0;
-				for (const auto & ch : boost::adaptors::reverse(sequence.String()))
+				for (const auto & ch : std::views::reverse(sequence.String()))
 				{
 					char chLower = std::tolower(ch);
 					if (charToDirection.count(chLower))
@@ -885,6 +885,10 @@ bool JsonUtils::parseBonus(const JsonNode &ability, Bonus *b, const TextIdentifi
 		case JsonNode::JsonType::DATA_STRING:
 			b->duration = parseByMap(bonusDurationMap, value, "duration type ");
 			break;
+		case JsonNode::JsonType::DATA_INTEGER:
+		case JsonNode::JsonType::DATA_FLOAT:
+			b->duration = static_cast<BonusDuration::Type>(value->Integer());
+			break;
 		case JsonNode::JsonType::DATA_VECTOR:
 			{
 				BonusDuration::Type dur = 0;
@@ -900,14 +904,14 @@ bool JsonUtils::parseBonus(const JsonNode &ability, Bonus *b, const TextIdentifi
 
 	value = &ability["sourceType"];
 	if (!value->isNull())
-		b->source = static_cast<BonusSource>(parseByMap(bonusSourceMap, value, "source type "));
+		b->source = static_cast<BonusSource>(parseByMapN(bonusSourceMap, value, "source type "));
 
 	if (!ability["sourceID"].isNull())
 		loadBonusSourceInstance(b->sid, b->source, ability["sourceID"]);
 
 	value = &ability["targetSourceType"];
 	if (!value->isNull())
-		b->targetSourceType = static_cast<BonusSource>(parseByMap(bonusSourceMap, value, "target type "));
+		b->targetSourceType = static_cast<BonusSource>(parseByMapN(bonusSourceMap, value, "target type "));
 
 	value = &ability["limiters"];
 	if (!value->isNull())

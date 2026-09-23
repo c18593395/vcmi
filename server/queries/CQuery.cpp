@@ -26,9 +26,10 @@ std::ostream & operator<<(std::ostream & out, QueryPtr query)
 	return out << "[" << query.get() << "] " << query->toString();
 }
 
-CQuery::CQuery(CGameHandler * gameHandler)
+CQuery::CQuery(CGameHandler * gameHandler, QueryType type)
 	: owner(gameHandler->queries.get())
 	, gh(gameHandler)
+	, type(type)
 {
 	queryID = ++gameHandler->QID;
 	logGlobal->trace("Created a new query with id %d", queryID);
@@ -41,11 +42,13 @@ CQuery::~CQuery()
 
 void CQuery::addPlayer(PlayerColor color)
 {
-	// ML fix (2026-08-17): 同阵营英雄交换 (CGarrisonDialogQuery) 会对同一 color 调两次 addPlayer,
-	// 无去重导致 players={RED,RED} → addQuery 双重 push 同一查询 → 查询栈永久污染 → NK2 查询确认链断裂
-	// → waitTillFree 永久卡死 (q=1 obj=1 mov=1) → 英雄不动。根因修复: 去重。
-	if(color.isValidPlayer() && !vstd::contains(players, color))
-		players.push_back(color);
+	assert(color.isValidPlayer());
+
+	// prevent duplicates
+	if(vstd::contains(players, color))
+		return;
+
+	players.push_back(color);
 }
 
 std::string CQuery::toString() const
@@ -94,8 +97,7 @@ void CQuery::notifyObjectAboutRemoval(const CGObjectInstance * visitedObject, co
 
 void CQuery::onExposure(QueryPtr topQuery)
 {
-	logGlobal->trace("Exposed query with id %d", queryID);
-	owner->popQuery(*this);
+
 }
 
 void CQuery::onAdding(PlayerColor color)
@@ -122,8 +124,8 @@ bool CQuery::blockAllButReply(const CPackForServer * pack) const
 	return true;
 }
 
-CDialogQuery::CDialogQuery(CGameHandler * owner):
-	CQuery(owner)
+CDialogQuery::CDialogQuery(CGameHandler * owner, QueryType type):
+	CQuery(owner, type)
 {
 
 }
@@ -145,7 +147,7 @@ void CDialogQuery::setReply(std::optional<int32_t> reply)
 }
 
 CGenericQuery::CGenericQuery(CGameHandler * gh, PlayerColor color, const std::function<void(std::optional<int32_t>)> & callback):
-	CQuery(gh), callback(callback)
+	CQuery(gh, QueryType::Generic), callback(callback)
 {
 	addPlayer(color);
 }

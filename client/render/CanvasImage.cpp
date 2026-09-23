@@ -32,6 +32,8 @@ CanvasImage::~CanvasImage()
 
 void CanvasImage::draw(SDL_Surface * where, const Point & pos, const Rect * src, int scalingFactor) const
 {
+	if(!surface)
+		return; // headless/资源缺失容错 (fork GUI bug: lobby 某 CanvasImage surface null → 0x0 崩)
 	if(src)
 		CSDL_Ext::blitSurface(surface, *src, where, pos);
 	else

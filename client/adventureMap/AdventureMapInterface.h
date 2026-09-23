@@ -10,6 +10,7 @@
 #pragma once
 
 #include "../gui/CIntObject.h"
+#include "AdventureMapShortcuts.h"
 
 VCMI_LIB_NAMESPACE_BEGIN
 
@@ -31,7 +32,6 @@ class IImage;
 class CAnimImage;
 class CGStatusBar;
 class AdventureMapWidget;
-class AdventureMapShortcuts;
 class MapView;
 class CResDataBar;
 class CHeroList;
@@ -71,6 +71,7 @@ private:
 	std::shared_ptr<TurnTimerWidget> watches;
 
 private:
+	EAdventureState getState() const;
 	void setState(EAdventureState state);
 
 	/// updates active state of game window whenever game state changes
@@ -95,6 +96,14 @@ private:
 	/// dim interface if some windows opened
 	void dim(Canvas & to);
 
+	/// exits disembark mode
+	void exitDisembarkMode();
+
+	/// performs disembark to specified location
+	void performDisembark(const int3 & destTarget);
+
+	/// checks if tile is a valid disembark target
+	bool isValidDisembarkTarget(int3 targetPosition) const;
 protected:
 	/// CIntObject interface implementation
 
@@ -111,6 +120,9 @@ protected:
 
 public:
 	AdventureMapInterface();
+
+	/// Provides access to the shortcut/action registry (callbacks + enabled states)
+	AdventureMapShortcuts & getAdventureShortcuts() const { return *shortcuts; }
 
 	void hotkeyAbortCastingMode();
 	void hotkeyExitWorldView();
@@ -195,6 +207,9 @@ public:
 
 	/// update state of buttons
 	void updateActiveState();
+
+	/// called by shortcut handler to enter disembark mode
+	void enterDisembarkMode();
 };
 
 extern std::shared_ptr<AdventureMapInterface> adventureInt;

@@ -4,6 +4,7 @@ set(lobby_SRCS
 		EntryPoint.cpp
 		HttpServer.cpp
 		LobbyDatabase.cpp
+		LobbyDefines.cpp
 		LobbyHttpApi.cpp
 		LobbyServer.cpp
 		SQLiteConnection.cpp
@@ -18,6 +19,7 @@ set(lobby_HEADERS
 		LobbyHttpApi.h
 		LobbyServer.h
 		SQLiteConnection.h
+		TimeTracker.h
 )
 
 # Generate header file from web assets

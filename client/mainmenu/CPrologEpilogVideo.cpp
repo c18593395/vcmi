@@ -44,7 +44,7 @@ CPrologEpilogVideo::CPrologEpilogVideo(CampaignScenarioPrologEpilog _spe, std::f
 
 	videoPlayer->setPlaybackFinishedCallback([this]() {
 		videoFinishedCounter++;
-		if((!spe.prologVideo.second.empty() && videoFinishedCounter < 2)) // play looped video at least once
+		if(!spe.prologVideo.second.empty() && videoFinishedCounter < 2) // play looped video at least once
 			return;
 
 		if(!videoFinished)

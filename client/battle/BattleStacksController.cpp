@@ -39,6 +39,7 @@
 #include "../../lib/battle/BattleHex.h"
 #include "../../lib/battle/CPlayerBattleCallback.h"
 #include "../../lib/spells/ISpellMechanics.h"
+#include "../../lib/spells/CSpell.h"
 #include "../../lib/texts/TextOperations.h"
 
 static void onAnimationFinished(const CStack *stack, std::weak_ptr<CreatureAnimation> anim)
@@ -455,7 +456,7 @@ void BattleStacksController::stacksAreAttacked(std::vector<StackAttackedInfo> at
 	for(auto & attackedInfo : attackedInfos)
 	{
 		bool useDeathAnim   = attackedInfo.killed;
-		bool useDefenceAnim = attackedInfo.defender->defendingAnim && !attackedInfo.indirectAttack && !attackedInfo.killed;
+		bool useDefenceAnim = attackedInfo.defender->defending && !attackedInfo.indirectAttack && !attackedInfo.killed;
 
 		EAnimationEvents usedEvent = useDefenceAnim ? EAnimationEvents::ATTACK : EAnimationEvents::HIT;
 
@@ -577,7 +578,9 @@ void BattleStacksController::stackAttacking( const StackAttackInfo & info )
 	auto spellEffect = info.spellEffect;
 	bool needsReverse = false;
 
-	if (info.indirectAttack)
+	const bool longWeaponMelee = attacker->hasBonusOfType(BonusType::LONG_WEAPON) && !CStack::isMeleeAttackPossible(attacker, defender);
+
+	if (info.indirectAttack || longWeaponMelee)
 	{
 		needsReverse = shouldRotate(attacker, attacker->position, info.tile);
 	}
@@ -612,10 +615,13 @@ void BattleStacksController::stackAttacking( const StackAttackInfo & info )
 
 	if(info.deathBlow)
 	{
-		owner.addToAnimationStage(EAnimationEvents::BEFORE_HIT, [this, defender, info]() {
-			owner.appendBattleLog(info.attacker->formatGeneralMessage(365));
-			owner.effectsController->displayEffect(EBattleEffect::DEATH_BLOW, AudioPath::builtin("DEATHBLO"), defender->getPosition());
-		});
+		if (defender)
+		{
+			owner.addToAnimationStage(EAnimationEvents::BEFORE_HIT, [this, defender, info]() {
+				owner.appendBattleLog(info.attacker->formatGeneralMessage(365));
+				owner.effectsController->displayEffect(EBattleEffect::DEATH_BLOW, AudioPath::builtin("DEATHBLO"), defender->getPosition());
+			});
+		}
 
 		for(auto elem : info.secondaryDefender)
 		{
@@ -896,7 +902,8 @@ std::vector<const CStack *> BattleStacksController::selectHoveredStacks()
 	// affected units by multi-hex attacks
 	if(owner.getBattle()->battleCanAttackHex(activeStack, hoveredHex) && owner.getBattle()->battleCanAttackUnit(activeStack, target))
 	{
-		BattleHex fromHex = owner.getBattle()->fromWhichHexAttack(activeStack, hoveredHex, owner.fieldController->selectAttackDirection(hoveredHex));
+		const bool allowLongWeapon = owner.actionsController->currentActionUsesLongWeapon(hoveredHex);
+		BattleHex fromHex = owner.getBattle()->fromWhichHexAttack(activeStack, hoveredHex, owner.fieldController->selectAttackDirection(hoveredHex), allowLongWeapon);
 		auto stackHexes = owner.getBattle()->battleGetAttackedHexes(activeStack, hoveredHex, fromHex);
 		for(auto & stackHex : stackHexes)
 		{

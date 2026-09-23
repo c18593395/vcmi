@@ -134,25 +134,8 @@ std::string LobbyHttpApi::serializeRooms(const std::vector<LobbyGameRoom> & room
 		if (count >= limit)
 			break;
 
-		JsonNode roomNode;
-		roomNode["description"].String() = room.description;
-		roomNode["status"].Integer() = static_cast<int>(room.roomState);
-		roomNode["playerLimit"].Integer() = room.playerLimit;
-		roomNode["version"].String() = room.version;
-		roomNode["secondsElapsed"].Integer() = room.age.count();
-
-		auto creationTime = std::chrono::system_clock::now() - room.age;
-		roomNode["createdAt"].String() = formatTimestamp(creationTime);
-
-		// Parse mods JSON string
-		try {
-			JsonNode modsNode(reinterpret_cast<const std::byte*>(room.modsJson.data()), room.modsJson.size(), "");
-			roomNode["mods"] = modsNode;
-		} catch(const std::exception & e) {
-			logGlobal->warn("HTTP API: failed to parse mods JSON: %s", e.what());
-			roomNode["mods"].Struct() = JsonMap{};
-		}
-
+		JsonNode roomNode = room.toJsonShort();
+		roomNode["createdAt"].String() = formatTimestamp(std::chrono::system_clock::now() - room.age);
 		result["rooms"].Vector().push_back(roomNode);
 		++count;
 	}

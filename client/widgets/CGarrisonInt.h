@@ -22,6 +22,7 @@ class CGarrisonInt;
 class CButton;
 class CAnimImage;
 class CLabel;
+class CPicture;
 
 enum class EGarrisonType
 {
@@ -39,6 +40,8 @@ class CGarrisonSlot : public CIntObject
 	EGarrisonType upg;
 
 	std::shared_ptr<CAnimImage> creatureImage;
+	std::shared_ptr<CPicture> artifactBackgroundImage;
+	std::shared_ptr<CAnimImage> artifactImage;
 	std::shared_ptr<CAnimImage> selectionImage; // image for selection, not always visible
 	std::shared_ptr<CLabel> stackCount;
 
@@ -82,6 +85,8 @@ public:
 /// Class which manages slots of upper and lower garrison, splitting of units
 class CGarrisonInt :public CIntObject
 {
+	friend class CGarrisonSlot;
+
 	/// Chosen slot. Should be changed only via selectSlot.
 	CGarrisonSlot * highlighted;
 	bool inSplittingMode;
@@ -89,6 +94,8 @@ class CGarrisonInt :public CIntObject
 
 	void createSlots();
 	bool checkSelected(const CGarrisonSlot * selected, TQuantity min = 0) const;
+	bool isStackTransferLocked(const CGarrisonSlot * selected) const;
+	bool showStackTransferError(const CGarrisonSlot * selected) const;
 
 	std::map<EGarrisonType, const CArmedInstance*> armedObjs;
 
@@ -106,6 +113,7 @@ public:
 
 	bool smallIcons;      ///< true - 32x32 imgs, false - 58x64
 	bool removableUnits;  ///< player Can remove units from up
+	bool showMoveUnitsOnHover = false; ///< show move action instead of select action when no slot is selected
 
 	ESlotsLayout layout;
 

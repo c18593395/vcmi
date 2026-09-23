@@ -24,6 +24,7 @@
 #include "../windows/InfoWindows.h"
 #include "TextControls.h"
 
+#include "../../lib/CConfigHandler.h"
 #include "../../lib/entities/artifact/ArtifactUtils.h"
 #include "../../lib/entities/artifact/CArtHandler.h"
 #include "../../lib/entities/building/CBuilding.h"
@@ -31,7 +32,6 @@
 #include "../../lib/entities/faction/CTown.h"
 #include "../../lib/entities/faction/CTownHandler.h"
 #include "../../lib/networkPacks/Component.h"
-#include "../../lib/spells/CSpellHandler.h"
 #include "../../lib/CCreatureHandler.h"
 #include "../../lib/CSkillHandler.h"
 #include "../../lib/texts/CGeneralTextHandler.h"
@@ -74,7 +74,12 @@ void CComponent::init(ComponentType Type, ComponentSubType Subtype, std::optiona
 
 	assert(size < sizeInvalid);
 
-	setSurface(getFileName()[size], (int)getIndex());
+	const auto imagePaths = getFileName();
+	const auto imageIndex = static_cast<int>(getIndex());
+	if(shouldUseRewardArtifactBackground(Type, imageSize))
+		setRewardArtifactBackground(imagePaths[size], imageIndex);
+	else
+		setSurface(imagePaths[size], imageIndex);
 
 	pos.w = image->pos.w;
 	pos.h = image->pos.h;
@@ -136,7 +141,7 @@ std::vector<AnimationPath> CComponent::getFileName() const
 	static const std::array<std::string, 4>  resourceArr =   {"SMALRES",        "RESOURCE",       "RESOURCE",       "RESOUR82"};
 	static const std::array<std::string, 4>  creatureArr =   {"CPRSMALL",       "CPRSMALL",       "TWCRPORT",       "TWCRPORT"};
 	static const std::array<std::string, 4>  artifactArr =   {"Artifact",       "Artifact",       "Artifact",       "Artifact"};
-	static const std::array<std::string, 4>  spellsArr =     {"SpellInt",       "SpellInt",       "SpellInt",       "SPELLSCR"};
+	static const std::array<std::string, 4>  spellsArr =     {"SpellInt",       "SpellInt",       "SPELLSCR",       "SPELLSCR"};
 	static const std::array<std::string, 4>  moraleArr =     {"IMRL22",         "IMRL30",         "IMRL42",         "imrl82"};
 	static const std::array<std::string, 4>  luckArr =       {"ILCK22",         "ILCK30",         "ILCK42",         "ilck82"};
 	static const std::array<std::string, 4>  heroArr =       {"PortraitsSmall", "PortraitsSmall", "PortraitsSmall", "PortraitsLarge"};
@@ -207,7 +212,7 @@ size_t CComponent::getIndex() const
 			return LIBRARY->artifacts()->getById(data.subType.as<ArtifactID>())->getIconIndex();
 		case ComponentType::SPELL_SCROLL:
 		case ComponentType::SPELL:
-			return (size < large) ? data.subType.getNum() + 1 : data.subType.getNum();
+			return (size < medium) ? data.subType.getNum() + 1 : data.subType.getNum();
 		case ComponentType::MORALE:
 			return std::clamp(data.value.value_or(0) + 3, 0, 6);
 		case ComponentType::LUCK:
@@ -319,9 +324,15 @@ std::string CComponent::getSubtitle() const
 				return "{#A9A9A9|" + LIBRARY->spells()->getById(data.subType.as<SpellID>())->getNameTranslated() + "}";
 			else
 				return LIBRARY->spells()->getById(data.subType.as<SpellID>())->getNameTranslated();
-		case ComponentType::NONE:
 		case ComponentType::MORALE:
+			if(settings["general"]["enableUiEnhancements"].Bool())
+				return boost::str(boost::format("%s %+d") % LIBRARY->generaltexth->allTexts[384] % data.value.value_or(0));
+			return "";
 		case ComponentType::LUCK:
+			if(settings["general"]["enableUiEnhancements"].Bool())
+				return boost::str(boost::format("%s %+d") % LIBRARY->generaltexth->allTexts[385] % data.value.value_or(0));
+			return "";
+		case ComponentType::NONE:
 		case ComponentType::HERO_PORTRAIT:
 			return "";
 		case ComponentType::BUILDING:
@@ -347,6 +358,21 @@ void CComponent::setSurface(const AnimationPath & defName, int imgPos)
 {
 	OBJECT_CONSTRUCTION;
 	image = std::make_shared<CAnimImage>(defName, imgPos);
+}
+
+bool CComponent::shouldUseRewardArtifactBackground(ComponentType Type, ESize imageSize) const
+{
+	return settings["general"]["enableUiEnhancements"].Bool() && Type == ComponentType::ARTIFACT && imageSize == large;
+}
+
+void CComponent::setRewardArtifactBackground(const AnimationPath & artifactDefName, int artifactImgPos)
+{
+	OBJECT_CONSTRUCTION;
+
+	image = std::make_shared<CAnimImage>(AnimationPath::builtin("SECSK82"), 0);
+	artifactOverlay = std::make_shared<CAnimImage>(artifactDefName, artifactImgPos);
+
+	artifactOverlay->moveTo(Point((image->pos.w - artifactOverlay->pos.w) / 2, (image->pos.h - artifactOverlay->pos.h) / 2));
 }
 
 void CComponent::showPopupWindow(const Point & cursorPosition)

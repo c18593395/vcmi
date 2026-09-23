@@ -69,7 +69,8 @@ uint32_t ModsState::computeChecksum(const TModID & modName) const
 {
 	boost::crc_32_type modChecksum;
 	// first - add current VCMI version into checksum to force re-validation on VCMI updates
-	modChecksum.process_bytes(static_cast<const void*>(GameConstants::VCMI_VERSION.data()), GameConstants::VCMI_VERSION.size());
+	const std::string_view vcmiVersion{GameConstants::VCMI_VERSION};
+	modChecksum.process_bytes(static_cast<const void*>(vcmiVersion.data()), vcmiVersion.size());
 
 	// second - add mod.json into checksum because filesystem does not contains this file
 	if (modName != ModScope::scopeBuiltin())
@@ -113,7 +114,7 @@ double ModsState::getInstalledModSizeMegabytes(const TModID & modName) const
 
 std::vector<TModID> ModsState::scanModsDirectory(const std::string & modDir) const
 {
-	size_t depth = boost::range::count(modDir, '/');
+	size_t depth = std::ranges::count(modDir, '/');
 
 	const auto & modScanFilter = [&](const ResourcePath & id) -> bool
 	{
@@ -121,7 +122,7 @@ std::vector<TModID> ModsState::scanModsDirectory(const std::string & modDir) con
 			return false;
 		if(!boost::algorithm::starts_with(id.getName(), modDir))
 			return false;
-		if(boost::range::count(id.getName(), '/') != depth)
+		if(std::ranges::count(id.getName(), '/') != depth)
 			return false;
 		return true;
 	};
@@ -513,6 +514,9 @@ ModManager::ModManager(const JsonNode & repositoryList)
 	eraseMissingModsFromPreset();
 	addNewModsToPreset();
 
+	// Sync roe-demo enabled state with demo data presence
+	syncDemoModState();
+
 	std::vector<TModID> desiredModList = modsPreset->getActiveMods();
 	ModDependenciesResolver newResolver(desiredModList, *modsStorage);
 	updatePreset(newResolver);
@@ -529,6 +533,11 @@ const ModDescription & ModManager::getModDescription(const TModID & modID) const
 bool ModManager::isModSettingActive(const TModID & rootModID, const TModID & modSettingID) const
 {
 	return modsPreset->getModSettings(rootModID).at(modSettingID);
+}
+
+std::map<TModID, bool> ModManager::getModSettings(const TModID & rootModID) const
+{
+	return modsPreset->getModSettings(rootModID);
 }
 
 bool ModManager::isModActive(const TModID & modID) const
@@ -613,6 +622,27 @@ void ModManager::addNewModsToPreset()
 		if (!modSettings.count(settingID))
 			modsPreset->setSettingActive(rootMod, settingID, !modsStorage->getMod(modID).keepDisabled());
 	}
+}
+
+void ModManager::syncDemoModState()
+{
+	static const TModID demoModID = "roe-demo";
+
+	if (!vstd::contains(modsStorage->getAllMods(), demoModID))
+		return;
+
+	if (!modsStorage->getMod(demoModID).isInstalled())
+		return;
+
+	bool hasFullData = CResourceHandler::get()->existsResource(ResourcePath("DATA/TENTCOLR.TXT"));
+	bool hasDemoData = !hasFullData && CResourceHandler::get()->existsResource(ResourcePath("MAPS/H3DEMO.H3M"));
+
+	bool isActive = vstd::contains(modsPreset->getActiveRootMods(), demoModID);
+
+	if (hasDemoData && !isActive)
+		modsPreset->setModActive(demoModID, true);
+	else if (!hasDemoData && isActive)
+		modsPreset->setModActive(demoModID, false);
 }
 
 TModList ModManager::getInstalledValidMods() const
@@ -776,7 +806,7 @@ const TModList & ModDependenciesResolver::getBrokenMods() const
 void ModDependenciesResolver::tryAddMods(TModList modsToResolve, const ModsStorage & storage)
 {
 	// Topological sort algorithm.
-	boost::range::sort(modsToResolve); // Sort mods per name
+	std::ranges::sort(modsToResolve); // Sort mods per name
 	std::vector<TModID> sortedValidMods(activeMods.begin(), activeMods.end()); // Vector keeps order of elements (LIFO)
 	std::set<TModID> resolvedModIDs(activeMods.begin(), activeMods.end()); // Use a set for validation for performance reason, but set does not keep order of elements
 	std::set<TModID> notResolvedModIDs(modsToResolve.begin(), modsToResolve.end()); // Use a set for validation for performance reason

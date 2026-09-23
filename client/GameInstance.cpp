@@ -13,6 +13,7 @@
 #include "CPlayerInterface.h"
 #include "CMT.h"
 #include "CServerHandler.h"
+#include "GameEngine.h"
 #include "mapView/mapHandler.h"
 #include "globalLobby/GlobalLobbyClient.h"
 #include "mainmenu/CMainMenu.h"
@@ -82,6 +83,9 @@ void GameInstance::setInterfaceInstance(CPlayerInterface * ptr)
 
 void GameInstance::onGlobalLobbyInterfaceActivated()
 {
+	if(ENGINE->isDemoData())
+		return;
+
 	server().getGlobalLobby().activateInterface();
 }
 
@@ -101,6 +105,14 @@ bool GameInstance::capturedAllEvents()
 
 void GameInstance::onShutdownRequested(bool ask)
 {
+	if(!ENGINE)
+	{
+		if(server().client)
+			server().endGameplay();
+		server().stopNetwork();
+		return;
+	}
+
 	auto doQuit = [](){ throw GameShutdownException(); };
 
 	if(!ask)

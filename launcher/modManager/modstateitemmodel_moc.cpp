@@ -11,6 +11,7 @@
 #include "modstateitemmodel_moc.h"
 
 #include "modstatemodel.h"
+#include "cmodlistview_moc.h"
 
 #include <QIcon>
 
@@ -55,6 +56,7 @@ QString ModStateItemModel::modTypeName(QString modTypeID) const
 		QT_TR_NOOP("Artifacts"),
 		QT_TR_NOOP("AI"),
 		QT_TR_NOOP("Resources"),
+		QT_TR_NOOP("Demo"),
 	};
 
 	if (modTypes.contains(modTypeID))
@@ -163,6 +165,8 @@ QVariant ModStateItemModel::data(const QModelIndex & index, int role) const
 			return getValue(mod, index.column());
 		case ModRoles::ModNameRole:
 			return mod.getID();
+		case ModRoles::ModNameRoleEnglish:
+			return mod.getNameEnglish();
 		}
 	}
 	return QVariant();
@@ -272,7 +276,7 @@ QModelIndex ModStateItemModel::parent(const QModelIndex & child) const
 void CModFilterModel::setTypeFilter(ModFilterMask newFilterMask)
 {
 	filterMask = newFilterMask;
-	invalidateFilter();
+	reloadFilter();
 }
 
 bool CModFilterModel::filterMatchesCategory(const QModelIndex & source) const
@@ -301,14 +305,34 @@ bool CModFilterModel::filterMatchesCategory(const QModelIndex & source) const
 
 bool CModFilterModel::filterMatchesThis(const QModelIndex & source) const
 {
-	return filterMatchesCategory(source) && QSortFilterProxyModel::filterAcceptsRow(source.row(), source.parent());
+	if(!filterMatchesCategory(source))
+		return false;
+
+	const QRegularExpression filter = filterRegularExpression();
+	if(filter.pattern().isEmpty())
+		return true;
+
+	if(QSortFilterProxyModel::filterAcceptsRow(source.row(), source.parent()))
+		return true;
+
+	const QString localizedName = source.data(Qt::DisplayRole).toString();
+	const QString englishName = source.data(ModRoles::ModNameRoleEnglish).toString();
+	return localizedName.contains(filter) || englishName.contains(filter);
 }
 
 bool CModFilterModel::filterAcceptsRow(int source_row, const QModelIndex & source_parent) const
 {
 	QModelIndex index = base->index(source_row, 0, source_parent);
 	QString modID = index.data(ModRoles::ModNameRole).toString();
-	if (base->model->getMod(modID).isHidden())
+	const auto & mod = base->model->getMod(modID);
+
+	if (mod.isHidden())
+		return false;
+
+	bool isDemo = CModListView::isDemoDataPresent();
+	if (isDemo && !mod.isTranslation())
+		return false;
+	if (mod.isDemoSupport())
 		return false;
 
 	if(filterMatchesThis(index))

@@ -8,6 +8,7 @@
  *
  */
 
+#include "StdInc.h"
 #include "MapProxy.h"
 #include "../TerrainHandler.h"
 #include "../GameLibrary.h"

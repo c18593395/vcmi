@@ -331,25 +331,44 @@ void CZonePlacer::prepareZones(TZoneMap &zones, TZoneVector &zonesVector, const 
 				zonesToPlace.push_back(zone);
 			else
 			{
-				auto & tt = (*LIBRARY->townh)[faction]->nativeTerrain;
-				if(tt == ETerrainId::NONE)
+				const auto & factionObject = (*LIBRARY->townh)[faction];
+				const auto & nativeTerrains = factionObject->nativeTerrains;
+				if(nativeTerrains.empty())
 				{
 					//any / random
 					zonesToPlace.push_back(zone);
 				}
 				else
 				{
-					const auto & terrainType = LIBRARY->terrainTypeHandler->getById(tt);
-					if(terrainType->isUnderground() && !terrainType->isSurface())
+					bool hasUndergroundTerrain = false;
+					bool hasSurfaceTerrain = false;
+					for (const auto & terrainId : nativeTerrains)
 					{
-						//underground only
-						zonesOnLevel[1]++;
-						levels[zone.first] = 1;
+						const auto & terrainType = LIBRARY->terrainTypeHandler->getById(terrainId);
+						if (terrainType->isUnderground())
+							hasUndergroundTerrain = true;
+						if (terrainType->isSurface())
+							hasSurfaceTerrain = true;
+					}
+
+					if(hasUndergroundTerrain && !hasSurfaceTerrain)
+					{
+						// underground only
+						if (mapLevels > 1)
+						{
+							zonesOnLevel[1]++;
+							levels[zone.first] = 1;
+						}
+						else
+						{
+							levels[zone.first] = 0;
+						}
 					}
 					else
 					{
-						//surface
-						addZoneEqually(zone, true);
+						// surface-only or mixed surface+underground
+						// mixed should not be forced to surface
+						addZoneEqually(zone, !hasUndergroundTerrain);
 					}
 				}
 			}
@@ -552,7 +571,7 @@ void CZonePlacer::moveOneZone(TZoneMap& zones, TForceVector& totalForces, TDista
 	if (misplacedZones.empty())
 		return;
 
-	boost::sort(misplacedZones, [](const Misplacement& lhs, Misplacement& rhs)
+	std::ranges::sort(misplacedZones, [](const Misplacement& lhs, Misplacement& rhs)
 	{
 		return lhs.first > rhs.first; //Largest displacement first
 	});
@@ -746,7 +765,7 @@ void CZonePlacer::assignZones(vstd::RNG * rand)
 				{
 					distances.emplace_back(zone.second, static_cast<float>(pos.dist2dSQ(zone.second->getPos())));
 				}
-				boost::min_element(distances, compareByDistance)->first->area()->add(pos); //closest tile belongs to zone
+				std::ranges::min_element(distances, compareByDistance)->first->area()->add(pos); //closest tile belongs to zone
 			}
 		}
 	}
@@ -779,7 +798,7 @@ void CZonePlacer::assignZones(vstd::RNG * rand)
 			{
 				distances.emplace_back(zone.second, zone.second->getCenter().dist2dSQ(float3(vertex.x(), vertex.y(), level)));
 			}
-			auto closestZone = boost::min_element(distances, compareByDistance)->first;
+			auto closestZone = std::ranges::min_element(distances, compareByDistance)->first;
 
 			vertexMapping[closestZone].insert(int3(vertex.x() * width, vertex.y() * height, level)); //Closest vertex belongs to zone
 		}
@@ -801,7 +820,7 @@ void CZonePlacer::assignZones(vstd::RNG * rand)
 				}
 
 				//Tile closest to vertex belongs to zone
-				auto closestZone = boost::min_element(distances, simpleCompareByDistance)->first;
+				auto closestZone = std::ranges::min_element(distances, simpleCompareByDistance)->first;
 				closestZone->area()->add(pos);
 				map.setZoneID(pos, closestZone->getId());
 			}

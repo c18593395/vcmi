@@ -13,7 +13,6 @@
 #include "BattleExchangeVariant.h"
 
 #include "StackWithBonuses.h"
-#include "EnemyInfo.h"
 #include "battle/AICombatOptions.h"
 #include "tbb/parallel_for.h"
 #include "../../lib/CStopWatch.h"
@@ -22,7 +21,6 @@
 #include "../../lib/callback/CBattleCallback.h"
 #include "../../lib/callback/IGameInfoCallback.h"
 #include "../../lib/mapObjects/CGTownInstance.h"
-#include "../../lib/spells/CSpellHandler.h"
 #include "../../lib/spells/ISpellMechanics.h"
 #include "../../lib/battle/BattleAction.h"
 #include "../../lib/battle/BattleStateInfoForRetreat.h"
@@ -138,7 +136,7 @@ void CBattleAI::activeStack(const BattleID & battleID, const CStack * stack )
 
 	auto start = std::chrono::high_resolution_clock::now();
 
-	if(stack->creatureId() == CreatureID::CATAPULT)
+	if(stack->isCatapult())
 	{
 		cb->battleMakeUnitAction(battleID, useCatapult(battleID, stack));
 		return;

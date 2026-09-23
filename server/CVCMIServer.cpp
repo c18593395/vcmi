@@ -8,6 +8,29 @@
  *
  */
 #include "StdInc.h"
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef NOGDI
+#define NOGDI
+#endif
+#ifndef NOUSER
+#define NOUSER
+#endif
+#ifndef NOKERNEL
+#define NOKERNEL
+#endif
+#ifndef NOSOUND
+#define NOSOUND
+#endif
+#include <windows.h> // [THREAD] 插桩 GetCurrentThreadId (09-09)
+#else
+static inline unsigned long GetCurrentThreadId() { return 0; }
+#endif
 #include "CVCMIServer.h"
 
 #include "CGameHandler.h"
@@ -25,6 +48,7 @@
 #include "../lib/mapping/CMapInfo.h"
 #include "../lib/mapping/CMapHeader.h"
 #include "../lib/modding/ModIncompatibility.h"
+#include "../lib/constants/IdentifierBase.h"
 #include "../lib/rmg/CMapGenOptions.h"
 #include "../lib/serializer/CMemorySerializer.h"
 #include "../lib/serializer/GameConnection.h"
@@ -140,7 +164,24 @@ void CVCMIServer::onPacketReceived(const std::shared_ptr<INetworkConnection> & c
 	if (c == nullptr)
 		throw std::out_of_range("Unknown connection received in CVCMIServer::findConnection");
 
-	auto pack = c->retrievePack(message);
+	std::unique_ptr<CPack> pack;
+	try
+	{
+		pack = c->retrievePack(message);
+	}
+	// [P8-C] #205: malformed / unknown entity identifier in a pack from an external client
+	// (e.g. bogus CreatureID string) must never kill the whole server — drop the pack instead.
+	catch (const IdentifierResolutionException & e)
+	{
+		logGlobal->error("Dropped malformed pack from connection: failed to resolve identifier '%s'", e.identifierName);
+		return;
+	}
+	catch (const std::exception & e)
+	{
+		logGlobal->error("Dropped malformed pack from connection: %s", e.what());
+		return;
+	}
+
 	CVCMIServerPackVisitor visitor(*this, this->gh, c);
 	pack->visit(visitor);
 }
@@ -265,6 +306,8 @@ bool CVCMIServer::prepareToStartGame()
 	auto progressTrackingThread = std::thread([this, &progressTracking]()
 	{
 		setThreadName("progressTrackingThread");
+		// 0909 插桩: 加载进度线程生命周期 (短生命周期线程 - 死锁 owner 嫌疑)
+		fprintf(stderr, "[THREAD] progressTracking ENTER tid=%lu\n", GetCurrentThreadId()); fflush(stderr);
 		auto currentProgress = std::numeric_limits<Load::Type>::max();
 
 		while(!progressTracking.finished())
@@ -283,6 +326,7 @@ bool CVCMIServer::prepareToStartGame()
 		LobbyLoadProgress loadProgress;
 		loadProgress.progress = std::numeric_limits<Load::Type>::max();
 		announcePack(loadProgress);
+		fprintf(stderr, "[THREAD] progressTracking EXIT tid=%lu\n", GetCurrentThreadId()); fflush(stderr);
 	});
 
 	auto newGH = std::make_shared<CGameHandler>(*this);
@@ -470,7 +514,7 @@ bool CVCMIServer::passHost(GameConnectionID toConnectionId)
 	return false;
 }
 
-void CVCMIServer::clientConnected(std::shared_ptr<GameConnection> c, std::vector<std::string> & names, const std::string & uuid, EStartMode mode)
+void CVCMIServer::clientConnected(std::shared_ptr<GameConnection> c, const std::vector<std::string> & names, const std::string & uuid, EStartMode mode)
 {
 	assert(getState() == EServerState::LOBBY);
 

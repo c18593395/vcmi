@@ -55,6 +55,10 @@ void MinimapView::mousePressEvent(QMouseEvent* event)
 	mouseMoveEvent(event);
 }
 
+#ifdef ENABLE_SINGLE_APP_BUILD
+namespace MapEditor {
+#endif
+
 MapView::MapView(QWidget * parent):
 	QGraphicsView(parent),
 	selectionTool(MapView::SelectionTool::None),
@@ -708,6 +712,10 @@ void MapView::setViewports()
 		}
 	}
 }
+
+#ifdef ENABLE_SINGLE_APP_BUILD
+} // namespace MapEditor
+#endif
 
 MapSceneBase::MapSceneBase(int lvl):
 	QGraphicsScene(nullptr),

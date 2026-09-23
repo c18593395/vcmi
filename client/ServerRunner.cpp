@@ -8,6 +8,29 @@
  *
  */
 #include "StdInc.h"
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef NOGDI
+#define NOGDI
+#endif
+#ifndef NOUSER
+#define NOUSER
+#endif
+#ifndef NOKERNEL
+#define NOKERNEL
+#endif
+#ifndef NOSOUND
+#define NOSOUND
+#endif
+#include <windows.h> // [THREAD] 插桩 GetCurrentThreadId (09-09)
+#else
+static inline unsigned long GetCurrentThreadId() { return 0; }
+#endif
 
 #include "ServerRunner.h"
 
@@ -51,9 +74,26 @@ void ServerThreadRunner::start(bool listenForConnections, bool connectToLobby, s
 
 	threadRunLocalServer = std::thread([this, connectToLobby, listenForConnections, &promise]{
 		setThreadName("runServer");
+		// 0909 插桩: server 线程生命周期
+		fprintf(stderr, "[THREAD] runServer ENTER tid=%lu\n", GetCurrentThreadId()); fflush(stderr);
 		uint16_t port = server->prepare(connectToLobby, listenForConnections);
 		promise.set_value(port);
-		server->run();
+		// 0910: exception escaping this thread hits SEH filter ("Disaster happened") and leaves a zombie process - log reason and exit cleanly instead
+		try
+		{
+			server->run();
+		}
+		catch (const std::exception & e)
+		{
+			logGlobal->error("runServer thread terminated by exception: %s", e.what());
+			fprintf(stderr, "[THREAD] runServer THREW: %s tid=%lu\n", e.what(), GetCurrentThreadId()); fflush(stderr);
+		}
+		catch (...)
+		{
+			logGlobal->error("runServer thread terminated by unknown exception");
+			fprintf(stderr, "[THREAD] runServer THREW: unknown tid=%lu\n", GetCurrentThreadId()); fflush(stderr);
+		}
+		fprintf(stderr, "[THREAD] runServer EXIT tid=%lu\n", GetCurrentThreadId()); fflush(stderr);
 	});
 
 	logNetwork->trace("Waiting for server port...");

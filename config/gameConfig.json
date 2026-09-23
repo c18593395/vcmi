@@ -103,6 +103,10 @@
 	[
 		"config/spellSchools.json"
 	],
+	"spellEffects" :
+	[
+		"config/spellEffects.json"
+	],
 	"skills" :
 	[
 		"config/skills.json"
@@ -139,7 +143,6 @@
 	[
 		"config/mapLayers.json"
 	],
-	
 	
 	"settings":
 	{
@@ -754,6 +757,8 @@
 			"stackExperience": false,
 			// if enabled, certain artifacts can be granted to creatures (WoG feature)
 			"stackArtifact": false,
+			// if enabled, equipped creature artifacts are displayed as an icon on stack slots
+			"stackArtifactIndication": false,
 			// if enabled, all heroes gain commander creature in battle (WoG feature)
 			"commanders": false
 		},

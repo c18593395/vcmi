@@ -51,6 +51,7 @@ public:
 	const JsonNode & getLocalConfig() const;
 	const JsonNode & getValue(const std::string & keyName) const;
 	const JsonNode & getLocalizedValue(const std::string & keyName) const;
+	const JsonNode & getLocalizedDescription() const;
 	const JsonNode & getLocalValue(const std::string & keyName) const;
 	const JsonNode & getRepositoryValue(const std::string & keyName) const;
 
@@ -63,6 +64,7 @@ public:
 	bool affectsGameplay() const;
 	bool isCompatibility() const;
 	bool isTranslation() const;
+	bool isDemoSupport() const;
 	bool keepDisabled() const;
 	bool isInstalled() const;
 

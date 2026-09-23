@@ -14,11 +14,11 @@
 #include "TownBuildingInstance.h"
 
 #include "../IGameSettings.h"
-#include "../spells/CSpellHandler.h"
 #include "../bonuses/Bonus.h"
 #include "../battle/IBattleInfoCallback.h"
 #include "../battle/BattleLayout.h"
 #include "../CConfigHandler.h"
+#include "../CCreatureHandler.h"
 #include "../texts/CGeneralTextHandler.h"
 #include "../gameState/CGameState.h"
 #include "../gameState/UpgradeInfo.h"
@@ -338,26 +338,47 @@ void CGTownInstance::onHeroVisit(IGameEventCallback & gameEvents, const CGHeroIn
 	else
 	{
 		assert(h->visitablePos() == this->visitablePos());
-		bool commander_recover = h->getCommander() && !h->getCommander()->alive;
-		if (commander_recover) // rise commander from dead
-		{
-			SetCommanderProperty scp;
-			scp.heroid = h->id;
-			scp.which = SetCommanderProperty::ALIVE;
-			scp.amount = 1;
-			gameEvents.sendAndApply(scp);
-		}
 		gameEvents.heroVisitCastle(this, h);
-		// TODO(vmarkovtsev): implement payment for rising the commander
-		if (commander_recover) // info window about commander
+		if(h->getCommander() && !h->getCommander()->alive)
 		{
-			InfoWindow iw;
-			iw.player = h->tempOwner;
-			iw.text.appendRawString(h->getCommander()->getName());
-			iw.components.emplace_back(ComponentType::CREATURE, h->getCommander()->getId(), h->getCommander()->getCount());
-			gameEvents.showInfoDialog(&iw);
+			BlockingDialog dialog(true, false);
+			dialog.player = h->tempOwner;
+			dialog.text.appendTextID("vcmi.commander.resurrectionOffer");
+			dialog.components.emplace_back(ComponentType::CREATURE, h->getCommander()->getId(), h->getCommander()->getCount());
+			const auto & resurrectionPrice = LIBRARY->creh->getCommanderResurrectionPrice(h->getCommander()->getCreature());
+			for(const auto & resource : LIBRARY->resourceTypeHandler->getAllObjects())
+			{
+				if(resurrectionPrice[resource] > 0)
+					dialog.components.emplace_back(ComponentType::RESOURCE, resource, -resurrectionPrice[resource]);
+			}
+			gameEvents.showBlockingDialog(this, &dialog);
 		}
 	}
+}
+
+void CGTownInstance::blockingDialogAnswered(IGameEventCallback & gameEvents, const CGHeroInstance * hero, int32_t answer) const
+{
+	if(!answer || !hero->getCommander() || hero->getCommander()->alive)
+		return;
+
+	const auto & resurrectionPrice = LIBRARY->creh->getCommanderResurrectionPrice(hero->getCommander()->getCreature());
+	if(!cb->getPlayerState(hero->tempOwner)->resources.canAfford(resurrectionPrice))
+	{
+		InfoWindow dialog;
+		dialog.player = hero->tempOwner;
+		dialog.text.appendTextID("vcmi.commander.insufficientResources");
+		gameEvents.showInfoDialog(&dialog);
+		return;
+	}
+
+	if(resurrectionPrice.nonZero())
+		gameEvents.giveResources(hero->tempOwner, -resurrectionPrice);
+
+	SetCommanderProperty property;
+	property.heroid = hero->id;
+	property.which = SetCommanderProperty::ALIVE;
+	property.amount = 1;
+	gameEvents.sendAndApply(property);
 }
 
 void CGTownInstance::onHeroLeave(IGameEventCallback & gameEvents, const CGHeroInstance * h) const
@@ -554,6 +575,11 @@ bool CGTownInstance::passableFor(PlayerColor color) const
 		return false;
 
 	return cb->getPlayerRelations(tempOwner, color) != PlayerRelations::ENEMIES;
+}
+
+EPathfindingLayer CGTownInstance::getBoatLayer() const
+{
+	return EPathfindingLayer::SAIL;
 }
 
 void CGTownInstance::getOutOffsets( std::vector<int3> &offsets ) const
@@ -1136,6 +1162,13 @@ void CGTownInstance::serializeJsonOptions(JsonSerializeFormat & handler)
 	{
 		handler.serializeIdArray( "possibleSpells", possibleSpells);
 		handler.serializeIdArray( "obligatorySpells", obligatorySpells);
+
+		if (!handler.saving)
+		{
+			// Workaround for invalid spells in	loaded map
+			vstd::erase(possibleSpells, SpellID());
+			vstd::erase(obligatorySpells, SpellID());
+		}
 	}
 
 	{
@@ -1164,14 +1197,18 @@ FactionID CGTownInstance::getFactionID() const
 	return FactionID(subID.getNum());
 }
 
-TerrainId CGTownInstance::getNativeTerrain() const
+bool CGTownInstance::isNativeTerrain(TerrainId terrain) const
 {
-	auto const & terrain = getTown()->faction->getNativeTerrain();
+	return getTown()->faction->isNativeTerrain(terrain);
+}
 
-	if (!terrain.toEntity(LIBRARY)->isSurface() && !terrain.toEntity(LIBRARY)->isUnderground())
-		logMod->warn("Faction %s has terrain %s as native, but terrain is not suitable for either surface or subterranean layers!", getTown()->faction->getJsonKey(), terrain.toEntity(LIBRARY)->getJsonKey());
+TerrainId CGTownInstance::getTownSiegeTerrain(TerrainId defaultTerrain) const
+{
+	const auto & nativeTerrains = getTown()->faction->nativeTerrains;
+	if(nativeTerrains.empty())
+		return defaultTerrain;
 
-	return terrain;
+	return nativeTerrains.front();
 }
 
 ArtifactID CGTownInstance::getWarMachineInBuilding(BuildingID building) const

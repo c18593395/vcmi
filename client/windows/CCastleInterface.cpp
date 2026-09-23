@@ -51,7 +51,6 @@
 #include "../../lib/GameLibrary.h"
 #include "../../lib/texts/CGeneralTextHandler.h"
 #include "../../lib/IGameSettings.h"
-#include "../../lib/spells/CSpellHandler.h"
 #include "../../lib/GameConstants.h"
 #include "../../lib/gameState/UpgradeInfo.h"
 #include "../../lib/StartInfo.h"
@@ -63,7 +62,8 @@
 #include "../../lib/mapObjects/CGHeroInstance.h"
 #include "../../lib/mapObjects/CGTownInstance.h"
 #include "../../lib/mapObjects/TownBuildingInstance.h"
-
+#include "../../lib/spells/CSpell.h"
+#include "wiki/WikiWindow.h"
 
 static bool useCompactCreatureBox()
 {
@@ -73,6 +73,122 @@ static bool useCompactCreatureBox()
 static bool useAvailableAmountAsCreatureLabel()
 {
 	return settings["gameTweaks"]["availableCreaturesAsDwellingLabel"].Bool();
+}
+
+struct UpgradableSlotsResult
+{
+	bool isCreatureUpgradePossible;
+	bool canAffordAny;
+	bool canAffordAll;
+	TResources totalCosts;
+	std::vector<std::pair<SlotID, UpgradeInfo>> upgradeInfos;
+};
+
+static UpgradableSlotsResult getUpgradableSlots(const CArmedInstance *obj)
+{
+	std::vector<std::pair<SlotID, UpgradeInfo>> upgradeInfos;
+	for(const auto & slot : obj->Slots())
+	{
+		auto upgradeInfo = std::make_pair(slot.first, UpgradeInfo(slot.second->getCreatureID()));
+		GAME->interface()->cb->fillUpgradeInfo(slot.second->getArmy(), slot.first, upgradeInfo.second);
+		bool canUpgrade = obj->tempOwner == GAME->interface()->playerID && upgradeInfo.second.canUpgrade();
+		if(canUpgrade)
+			upgradeInfos.push_back(upgradeInfo);
+	}
+
+	std::sort(upgradeInfos.begin(), upgradeInfos.end(), [&](const std::pair<SlotID, UpgradeInfo> & lhs, const std::pair<SlotID, UpgradeInfo> & rhs) {
+		return lhs.second.oldID.toCreature()->getLevel() > rhs.second.oldID.toCreature()->getLevel();
+	});
+	bool hasCreaturesToUpgrade = !upgradeInfos.empty();
+
+	TResources costs;
+	std::vector<SlotID> slotInfosToDelete;
+	for(const auto & upgradeInfo : upgradeInfos)
+	{
+		TResources upgradeCosts = upgradeInfo.second.getUpgradeCosts() * obj->Slots().at(upgradeInfo.first)->getCount();
+		if(GAME->interface()->cb->getResourceAmount().canAfford(costs + upgradeCosts))
+			costs += upgradeCosts;
+		else
+			slotInfosToDelete.push_back(upgradeInfo.first);
+	}
+	upgradeInfos.erase(std::remove_if(upgradeInfos.begin(), upgradeInfos.end(), [&slotInfosToDelete](const auto& item) {
+		return std::count(slotInfosToDelete.begin(), slotInfosToDelete.end(), item.first);
+	}), upgradeInfos.end());
+
+	return UpgradableSlotsResult { hasCreaturesToUpgrade, !upgradeInfos.empty(), slotInfosToDelete.empty(), costs, upgradeInfos };
+}
+
+static void upgradeAllCreatures(const CArmedInstance *obj, const UpgradableSlotsResult & upgradableSlots)
+{
+	if(!upgradableSlots.canAffordAny)
+	{
+		GAME->interface()->showInfoDialog(LIBRARY->generaltexth->translate("vcmi.townWindow.upgradeAll.notUpgradable"));
+		return;
+	}
+
+	std::vector<std::shared_ptr<CComponent>> resComps;
+	for(TResources::nziterator i(upgradableSlots.totalCosts); i.valid(); i++)
+		resComps.push_back(std::make_shared<CComponent>(ComponentType::RESOURCE, i->resType, i->resVal));
+	if(resComps.empty())
+		resComps.push_back(std::make_shared<CComponent>(ComponentType::RESOURCE, static_cast<GameResID>(GameResID::GOLD), 0)); // add at least gold, when there are no costs
+	resComps.back()->newLine = true;
+	for(auto & upgradeInfo : upgradableSlots.upgradeInfos)
+		resComps.push_back(std::make_shared<CComponent>(ComponentType::CREATURE, upgradeInfo.second.getUpgrade(), obj->Slots().at(upgradeInfo.first)->getCount()));
+
+	std::string textID = upgradableSlots.canAffordAll ? "core.genrltxt.207" : "vcmi.townWindow.upgradeAll.notAllUpgradable";
+
+	GAME->interface()->showYesNoDialog(LIBRARY->generaltexth->translate(textID), [upgradableSlots, obj](){
+		for(auto & upgradeInfo : upgradableSlots.upgradeInfos)
+			GAME->interface()->cb->upgradeCreature(obj, upgradeInfo.first, upgradeInfo.second.getUpgrade());
+	}, nullptr, resComps);
+}
+
+CSpellResearchDialog::CSpellResearchDialog(const std::string & textToShow, const std::vector<std::shared_ptr<CComponent>> & comps, const CGTownInstance * town, SpellID oldSpell, bool canAfford)
+	: CWindowObject(PLAYER_COLORED_BORDERED_STATUSBAR, ImagePath::builtin("spellResearchDialog"))
+{
+	OBJECT_CONSTRUCTION;
+
+	const int sideMargin = 22;
+	const int sideMarginComp = 36;
+	const int titleY = 40;
+	const int textTop = 50;
+	const int textHeight = 90;
+	const int statusbarHeight = 26;
+	const int gapBeforeStatusbar = 12;
+	const int componentsTop = 150;
+
+	const std::string titleText = LIBRARY->generaltexth->translate("vcmi.spellResearch.title");
+	title = std::make_shared<CLabel>(pos.w / 2, titleY, FONT_BIG, ETextAlignment::CENTER, Colors::YELLOW, titleText);
+	description = std::make_shared<CTextBox>(textToShow, Rect(sideMargin, textTop, pos.w - 2 * sideMargin, textHeight), 0, FONT_MEDIUM, ETextAlignment::CENTER, Colors::WHITE);
+	components = std::make_shared<CComponentBox>(comps, Rect(sideMarginComp, componentsTop, pos.w - 2 * sideMarginComp, 0));
+
+	const int buttonY = 468 - statusbarHeight - gapBeforeStatusbar - 32;
+	const int buttonSpacing = 16;
+	const int totalButtonsWidth = 3 * 80 + 2 * buttonSpacing;
+	int buttonX = (pos.w - totalButtonsWidth) / 2;
+
+	acceptButton = std::make_shared<CButton>(Point(buttonX, buttonY), AnimationPath::builtin("settingsWindow/button80"), CButton::tooltip(LIBRARY->generaltexth->translate("vcmi.spellResearch.research"), ""), [this](){ close(); }, EShortcut::GLOBAL_ACCEPT);
+	acceptButton->setBorderColor(Colors::METALLIC_GOLD);
+	acceptButton->setOverlay(std::make_shared<CPicture>(ImagePath::builtin("spellResearch/accept")));
+	acceptButton->addCallback([town, oldSpell](){ GAME->interface()->cb->spellResearch(town, oldSpell, true); });
+	acceptButton->setEnabled(canAfford);
+	acceptButton->addPopupCallback([](){ CRClickPopup::createAndPush(LIBRARY->generaltexth->translate("vcmi.spellResearch.research")); });
+
+	buttonX += 80 + buttonSpacing;
+	rerollButton = std::make_shared<CButton>(Point(buttonX, buttonY), AnimationPath::builtin("settingsWindow/button80"), CButton::tooltip(LIBRARY->generaltexth->translate("vcmi.spellResearch.skip"), ""), [this](){ close(); });
+	rerollButton->setBorderColor(Colors::METALLIC_GOLD);
+	rerollButton->setOverlay(std::make_shared<CPicture>(ImagePath::builtin("spellResearch/reroll")));
+	rerollButton->addCallback([town, oldSpell](){ GAME->interface()->cb->spellResearch(town, oldSpell, false); });
+	rerollButton->setEnabled(canAfford);
+	rerollButton->addPopupCallback([](){ CRClickPopup::createAndPush(LIBRARY->generaltexth->translate("vcmi.spellResearch.skip")); });
+
+	buttonX += 80 + buttonSpacing;
+	closeButton = std::make_shared<CButton>(Point(buttonX, buttonY), AnimationPath::builtin("settingsWindow/button80"), CButton::tooltip(LIBRARY->generaltexth->translate("vcmi.spellResearch.abort"), ""), [this](){ close(); }, EShortcut::GLOBAL_CANCEL);
+	closeButton->setBorderColor(Colors::METALLIC_GOLD);
+	closeButton->setOverlay(std::make_shared<CPicture>(ImagePath::builtin("spellResearch/close")));
+	closeButton->addPopupCallback([](){ CRClickPopup::createAndPush(LIBRARY->generaltexth->translate("vcmi.spellResearch.abort")); });
+
+	statusbar = CGStatusBar::create(std::make_shared<CPicture>(background->getSurface(), Rect(8, pos.h - 26, pos.w - 16, 19), 8, pos.h - 26));
 }
 
 CBuildingRect::CBuildingRect(CCastleBuildings * Par, const CGTownInstance * Town, const CStructure * Str)
@@ -355,42 +471,6 @@ CHeroGSlot::CHeroGSlot(int x, int y, int updown, const CGHeroInstance * h, HeroS
 
 CHeroGSlot::~CHeroGSlot() = default;
 
-auto CHeroGSlot::getUpgradableSlots(const CArmedInstance *obj) const
-{
-	struct result { bool isCreatureUpgradePossible; bool canAffordAny; bool canAffordAll; TResources totalCosts; std::vector<std::pair<SlotID, UpgradeInfo>> upgradeInfos; };
-
-	std::vector<std::pair<SlotID, UpgradeInfo>> upgradeInfos;
-	for(const auto & slot : obj->Slots())
-	{
-		auto upgradeInfo = std::make_pair(slot.first, UpgradeInfo(slot.second->getCreatureID()));
-		GAME->interface()->cb->fillUpgradeInfo(slot.second->getArmy(), slot.first, upgradeInfo.second);
-		bool canUpgrade = obj->tempOwner == GAME->interface()->playerID && upgradeInfo.second.canUpgrade();
-		if(canUpgrade)
-			upgradeInfos.push_back(upgradeInfo);
-	}
-
-	std::sort(upgradeInfos.begin(), upgradeInfos.end(), [&](const std::pair<SlotID, UpgradeInfo> & lhs, const std::pair<SlotID, UpgradeInfo> & rhs) {
-		return lhs.second.oldID.toCreature()->getLevel() > rhs.second.oldID.toCreature()->getLevel();
-	});
-	bool hasCreaturesToUpgrade = !upgradeInfos.empty();
-
-	TResources costs;
-	std::vector<SlotID> slotInfosToDelete;
-	for(const auto & upgradeInfo : upgradeInfos)
-	{
-		TResources upgradeCosts = upgradeInfo.second.getUpgradeCosts() * obj->Slots().at(upgradeInfo.first)->getCount();
-		if(GAME->interface()->cb->getResourceAmount().canAfford(costs + upgradeCosts))
-			costs += upgradeCosts;
-		else
-			slotInfosToDelete.push_back(upgradeInfo.first);
-	}
-	upgradeInfos.erase(std::remove_if(upgradeInfos.begin(), upgradeInfos.end(), [&slotInfosToDelete](const auto& item) {
-		return std::count(slotInfosToDelete.begin(), slotInfosToDelete.end(), item.first);
-	}), upgradeInfos.end());
-
-	return result { hasCreaturesToUpgrade, !upgradeInfos.empty(), slotInfosToDelete.empty(), costs, upgradeInfos };
-}
-
 void CHeroGSlot::gesture(bool on, const Point & initialPosition, const Point & finalPosition)
 {
 	if(!on)
@@ -403,29 +483,7 @@ void CHeroGSlot::gesture(bool on, const Point & initialPosition, const Point & f
 		return;
 
 	auto upgradableSlots = getUpgradableSlots(obj);
-	auto upgradeAll = [upgradableSlots, obj](){
-		if(!upgradableSlots.canAffordAny)
-		{
-			GAME->interface()->showInfoDialog(LIBRARY->generaltexth->translate("vcmi.townWindow.upgradeAll.notUpgradable"));
-			return;
-		}
-
-		std::vector<std::shared_ptr<CComponent>> resComps;
-		for(TResources::nziterator i(upgradableSlots.totalCosts); i.valid(); i++)
-			resComps.push_back(std::make_shared<CComponent>(ComponentType::RESOURCE, i->resType, i->resVal));
-		if(resComps.empty())
-			resComps.push_back(std::make_shared<CComponent>(ComponentType::RESOURCE, static_cast<GameResID>(GameResID::GOLD), 0)); // add at least gold, when there are no costs
-		resComps.back()->newLine = true;
-		for(auto & upgradeInfo : upgradableSlots.upgradeInfos)
-			resComps.push_back(std::make_shared<CComponent>(ComponentType::CREATURE, upgradeInfo.second.getUpgrade(), obj->Slots().at(upgradeInfo.first)->getCount()));
-			
-		std::string textID = upgradableSlots.canAffordAll ? "core.genrltxt.207" : "vcmi.townWindow.upgradeAll.notAllUpgradable";
-
-		GAME->interface()->showYesNoDialog(LIBRARY->generaltexth->translate(textID), [upgradableSlots, obj](){
-			for(auto & upgradeInfo : upgradableSlots.upgradeInfos)
-				GAME->interface()->cb->upgradeCreature(obj, upgradeInfo.first, upgradeInfo.second.getUpgrade());
-		}, nullptr, resComps);
-	};
+	auto upgradeAll = [obj, upgradableSlots](){ upgradeAllCreatures(obj, upgradableSlots); };
 
 	if (!settings["input"]["radialWheelGarrisonSwipe"].Bool())
 		return;
@@ -718,7 +776,7 @@ void CCastleBuildings::recreate()
 	{
 		const CBuilding * build = town->getTown()->buildings.at(entry.first).get();
 
-		const CStructure * toAdd = *boost::max_element(entry.second, [=](const CStructure * a, const CStructure * b)
+		const CStructure * toAdd = *std::ranges::max_element(entry.second, [=](const CStructure * a, const CStructure * b)
 		{
 			return build->getDistance(a->building->bid) < build->getDistance(b->building->bid);
 		});
@@ -741,7 +799,7 @@ void CCastleBuildings::recreate()
 		return (*b1)<(*b2);
 	};
 
-	boost::sort(children, buildSorter); //TODO: create building in blit order
+	std::ranges::sort(children, buildSorter); //TODO: create building in blit order
 }
 
 void CCastleBuildings::drawOverlays(Canvas & to, std::vector<std::shared_ptr<CBuildingRect>> buildingRects)
@@ -844,7 +902,7 @@ void CCastleBuildings::buildingClicked(BuildingID building)
 		buildingToEnter = b->upgrade;
 	}
 
-	for(BuildingID buildingToEnter : boost::adaptors::reverse(buildingsToTest))
+	for(BuildingID buildingToEnter : std::views::reverse(buildingsToTest))
 	{
 		if (buildingTryActivateCustomUI(buildingToEnter, building))
 			return;
@@ -1025,25 +1083,13 @@ void CCastleBuildings::enterBlacksmith(BuildingID building, ArtifactID artifactI
 	auto art = artifactID.toArtifact();
 
 	int price = art->getPrice();
-	bool possible = GAME->interface()->cb->getResourceAmount(EGameResID::GOLD) >= price;
-	if(possible)
-	{
-		for(auto slot : art->getPossibleSlots().at(ArtBearer::HERO))
-		{
-			if(hero->getArt(slot) == nullptr || hero->getArt(slot)->getTypeId() != artifactID)
-			{
-				possible = true;
-				break;
-			}
-			else
-			{
-				possible = false;
-			}
-		}
-	}
+	ArtifactID existingArtifact = hero->getReplacedWarMachine(artifactID);
 
-	CreatureID creatureID = artifactID.toArtifact()->getWarMachine();
-	ENGINE->windows().createAndPushWindow<CBlacksmithDialog>(possible, creatureID, artifactID, hero->id);
+	bool canAfford = GAME->interface()->cb->getResourceAmount(EGameResID::GOLD) >= price;
+	bool hasSameMachine = existingArtifact.hasValue() && existingArtifact == artifactID;
+	bool possible = canAfford && !hasSameMachine;
+
+	ENGINE->windows().createAndPushWindow<CBlacksmithDialog>(possible, artifactID, existingArtifact, hero->id);
 }
 
 void CCastleBuildings::enterBuilding(BuildingID building)
@@ -1131,7 +1177,7 @@ void CCastleBuildings::enterFountain(const BuildingID & building, BuildingSubID:
 		|| (upgrades != BuildingID::NONE
 			&& town->getTown()->buildings.find(BuildingID(upgrades))->second->subId == BuildingSubID::MYSTIC_POND);
 
-	if(upgrades != BuildingID::NONE)
+	if(upgrades != BuildingID::NONE && upgrades != building)
 		descr += "\n\n"+town->getTown()->buildings.find(BuildingID(upgrades))->second->getDescriptionTranslated();
 
 	if(isMysticPondOrItsUpgrade) //for vanila Rampart like towns
@@ -1351,8 +1397,7 @@ void CCreaInfo::clickPressed(const Point & cursorPosition)
 
 			si32 amount = town->creatures[i].first;
 			auto creatureId = ENGINE->isKeyboardCtrlDown() ? town->creatures[i].second.back() : town->creatures[i].second.front();
-			auto creature = creatureId.toCreature();
-			si32 maxAmount = creature->maxAmount(GAME->interface()->cb->getResourceAmount());
+			si32 maxAmount = creatureId.toCreature()->maxAmount(GAME->interface()->cb->getResourceAmount());
 			vstd::amin(maxAmount, amount);
 
 			if(maxAmount > 0)
@@ -1592,6 +1637,58 @@ void CCastleInterface::removeBuilding(BuildingID bid)
 	redraw();
 }
 
+class TownRadialArea : public CIntObject
+{
+	const CGTownInstance * town;
+	CCastleInterface * owner;
+public:
+	TownRadialArea(const Rect & Pos, const CGTownInstance * Town, CCastleBuildings * Builds, CCastleInterface * Owner)
+		: CIntObject(GESTURE), town(Town), owner(Owner)
+	{
+		pos = Pos + pos.topLeft();
+	}
+
+	void gesture(bool on, const Point & initialPosition, const Point & finalPosition) override
+	{
+		if(!on)
+			return;
+
+		if (!settings["input"]["radialWheelGarrisonSwipe"].Bool())
+			return;
+
+		auto isMarketAvailable = [this](){
+			if(town->hasBuilt(BuildingID::MARKETPLACE))
+				return true;
+			for(const auto & t : GAME->interface()->cb->getTownsInfo(true))
+				if(t->hasBuilt(BuildingID::MARKETPLACE))
+					return true;
+			return false;
+		};
+
+		std::vector<RadialMenuConfig> menuElements = {
+			{ RadialMenuConfig::ITEM_NW, true, "openTavern", "vcmi.radialWheel.openTavern", [this](){
+				owner->keyPressed(EShortcut::TOWN_OPEN_TAVERN);
+			}, !town->hasBuilt(BuildingID::TAVERN)},
+			{ RadialMenuConfig::ITEM_NE, true, "openMageGuild", "vcmi.radialWheel.openMageGuild", [this](){
+				owner->keyPressed(EShortcut::TOWN_OPEN_MAGE_GUILD);
+			}, !town->hasBuilt(BuildingID::MAGES_GUILD_1)},
+			{ RadialMenuConfig::ITEM_SW, true, "openBlacksmith", "vcmi.radialWheel.openBlacksmith", [this](){
+				owner->keyPressed(EShortcut::TOWN_OPEN_BLACKSMITH);
+			}, !town->getWarMachineInBuilding(BuildingID::BLACKSMITH).hasValue()},
+			{ RadialMenuConfig::ITEM_SE, true, "openMarketplace", "vcmi.radialWheel.openMarketplace", [this](){
+				owner->keyPressed(EShortcut::TOWN_OPEN_MARKET);
+			}, !isMarketAvailable()},
+			{ RadialMenuConfig::ITEM_EE, true, "openShipyard", "vcmi.radialWheel.openShipyard", [this](){
+				owner->keyPressed(EShortcut::TOWN_OPEN_SHIPYARD);
+			}, !town->hasBuilt(BuildingID::SHIPYARD)},
+			{ RadialMenuConfig::ITEM_WW, true, "openCastle", "vcmi.radialWheel.openCastle", [this](){
+				owner->keyPressed(EShortcut::TOWN_OPEN_FORT);
+			}, !(town->fortLevel() > CGTownInstance::NONE)},
+		};
+		ENGINE->windows().createAndPushWindow<RadialMenu>(finalPosition, menuElements);
+	}
+};
+
 void CCastleInterface::recreateIcons()
 {
 	OBJECT_CONSTRUCTION;
@@ -1612,14 +1709,20 @@ void CCastleInterface::recreateIcons()
 	fastArmyPurchase->setOverlay(std::make_shared<CAnimImage>(AnimationPath::builtin("itmcl"), imageIndex));
 
 	fastMarket = std::make_shared<LRClickableArea>(Rect(163, 410, 64, 42), [this]() { builds->enterAnyMarket(); });
-	fastTavern = std::make_shared<LRClickableArea>(Rect(15, 387, 58, 64), [&]()
 	{
-		if(town->hasBuilt(BuildingID::TAVERN))
-			GAME->interface()->showTavernWindow(town, nullptr, QueryID::NONE);
-	}, [this]{
-		if(!town->getFaction()->getDescriptionTranslated().empty())
-			CRClickPopup::createAndPush(town->getFaction()->getDescriptionTranslated());
-	});
+		const std::string factionKey = town->getTown()->faction->getJsonKey();
+		fastWiki = std::make_shared<LRClickableArea>(Rect(15, 387, 58, 64), [factionKey]()
+		{
+			ENGINE->windows().createAndPushWindow<WikiWindow>(
+				WikiWindow::Style::BROWN,
+				WikiEntryKey{WikiCategory::TOWN, factionKey});
+		}, [this]{
+			if(!town->getFaction()->getDescriptionTranslated().empty())
+				CRClickPopup::createAndPush(town->getFaction()->getDescriptionTranslated());
+		});
+	}
+
+	townRadialArea = std::make_shared<TownRadialArea>(Rect(15, 387, 213, 66), town, builds.get(), this);
 
 	creainfo.clear();
 
@@ -1655,6 +1758,17 @@ void CCastleInterface::keyPressed(EShortcut key)
 		if(town->hasBuilt(BuildingID::MAGES_GUILD_1))
 			builds->enterMagesGuild();
 		break;
+	case EShortcut::TOWN_OPEN_BLACKSMITH:
+	{
+		auto warMachine = town->getWarMachineInBuilding(BuildingID::BLACKSMITH);
+		if(warMachine.hasValue())
+			builds->buildingTryActivateCustomUI(BuildingID::BLACKSMITH, BuildingID::BLACKSMITH);
+		break;
+	}
+	case EShortcut::TOWN_OPEN_SHIPYARD:
+		if(town->hasBuilt(BuildingID::SHIPYARD))
+			GAME->interface()->showShipyardDialog(town);
+		break;
 	case EShortcut::TOWN_OPEN_THIEVES_GUILD:
 		break;
 	case EShortcut::TOWN_OPEN_HERO_EXCHANGE:
@@ -1678,9 +1792,32 @@ void CCastleInterface::keyPressed(EShortcut key)
 	case EShortcut::TOWN_SWAP_ARMIES:
 		heroes->swapArmies();
 		break;
+	case EShortcut::TOWN_UPGRADE_GARRISON:
+	{
+		auto upgradableSlots = getUpgradableSlots(town->getUpperArmy());
+		if(upgradableSlots.isCreatureUpgradePossible)
+			upgradeAllCreatures(town->getUpperArmy(), upgradableSlots);
+		break;
+	}
+	case EShortcut::TOWN_UPGRADE_VISITING:
+	{
+		const auto *visitingHero = town->getVisitingHero();
+		if(visitingHero)
+		{
+			auto upgradableSlots = getUpgradableSlots(visitingHero);
+			if(upgradableSlots.isCreatureUpgradePossible)
+				upgradeAllCreatures(visitingHero, upgradableSlots);
+		}
+		break;
+	}
 	case EShortcut::TOWN_OPEN_TAVERN:
 		if(town->hasBuilt(BuildingID::TAVERN))
 			GAME->interface()->showTavernWindow(town, nullptr, QueryID::NONE);
+		break;
+	case EShortcut::ADVENTURE_OPEN_WIKI:
+		ENGINE->windows().createAndPushWindow<WikiWindow>(
+			WikiWindow::Style::BROWN,
+			WikiEntryKey{WikiCategory::TOWN, town->getTown()->faction->getJsonKey()});
 		break;
 	default:
 		break;
@@ -2306,25 +2443,10 @@ void CMageGuildScreen::Scroll::clickPressed(const Point & cursorPosition)
 			resComps.push_back(std::make_shared<CComponent>(ComponentType::RESOURCE, i->resType, i->resVal, CComponent::ESize::medium));
 		}
 
-		std::vector<std::pair<AnimationPath, CFunctionList<void()>>> pom;
-		for(int i = 0; i < 3; i++)
-			pom.emplace_back(AnimationPath::builtin("settingsWindow/button80"), nullptr);
-
 		auto text = LIBRARY->generaltexth->translate(GAME->interface()->cb->getResourceAmount().canAfford(cost) ? "vcmi.spellResearch.pay" : "vcmi.spellResearch.canNotAfford");
 		boost::replace_first(text, "%SPELL1", spell->id.toSpell()->getNameTranslated());
 		boost::replace_first(text, "%SPELL2", newSpell.toSpell()->getNameTranslated());
-		auto temp = std::make_shared<CInfoWindow>(text, GAME->interface()->playerID, resComps, pom);
-
-		temp->buttons[0]->setOverlay(std::make_shared<CPicture>(ImagePath::builtin("spellResearch/accept")));
-		temp->buttons[0]->addCallback([this, town](){ GAME->interface()->cb->spellResearch(town, spell->id, true); });
-		temp->buttons[0]->addPopupCallback([](){ CRClickPopup::createAndPush(LIBRARY->generaltexth->translate("vcmi.spellResearch.research")); });
-		temp->buttons[0]->setEnabled(GAME->interface()->cb->getResourceAmount().canAfford(cost));
-		temp->buttons[1]->setOverlay(std::make_shared<CPicture>(ImagePath::builtin("spellResearch/reroll")));
-		temp->buttons[1]->addCallback([this, town](){ GAME->interface()->cb->spellResearch(town, spell->id, false); });
-		temp->buttons[1]->addPopupCallback([](){ CRClickPopup::createAndPush(LIBRARY->generaltexth->translate("vcmi.spellResearch.skip")); });
-		temp->buttons[1]->setEnabled(GAME->interface()->cb->getResourceAmount().canAfford(cost));
-		temp->buttons[2]->setOverlay(std::make_shared<CPicture>(ImagePath::builtin("spellResearch/close")));
-		temp->buttons[2]->addPopupCallback([](){ CRClickPopup::createAndPush(LIBRARY->generaltexth->translate("vcmi.spellResearch.abort")); });
+		auto temp = std::make_shared<CSpellResearchDialog>(text, resComps, town, spell->id, GAME->interface()->cb->getResourceAmount().canAfford(cost));
 
 		ENGINE->windows().pushWindow(temp);
 	}
@@ -2346,7 +2468,7 @@ void CMageGuildScreen::Scroll::hover(bool on)
 
 }
 
-CBlacksmithDialog::CBlacksmithDialog(bool possible, CreatureID creMachineID, ArtifactID aid, ObjectInstanceID hid):
+CBlacksmithDialog::CBlacksmithDialog(bool possible, ArtifactID aid, ArtifactID existingArtifact, ObjectInstanceID hid):
 	CWindowObject(PLAYER_COLORED, ImagePath::builtin("TPSMITH"))
 {
 	OBJECT_CONSTRUCTION;
@@ -2359,7 +2481,7 @@ CBlacksmithDialog::CBlacksmithDialog(bool possible, CreatureID creMachineID, Art
 	animBG = std::make_shared<CPicture>(ImagePath::builtin("TPSMITBK"), 64, 50);
 	animBG->needRefresh = true;
 
-	const CCreature * creature = creMachineID.toCreature();
+	const CCreature * creature = aid.toArtifact()->getWarMachine().toCreature();
 	anim = std::make_shared<CCreatureAnim>(64, 50, creature->animDefName);
 	anim->clipRect(113,125,200,150);
 
@@ -2384,7 +2506,25 @@ CBlacksmithDialog::CBlacksmithDialog(bool possible, CreatureID creMachineID, Art
 	cancel = std::make_shared<CButton>(Point(224, 312), AnimationPath::builtin("ICANCEL.DEF"), CButton::tooltip(cancelText.toString()), [&](){ close(); }, EShortcut::GLOBAL_CANCEL);
 
 	if(possible)
-		buy->addCallback([=](){ GAME->interface()->cb->buyArtifact(GAME->interface()->cb->getHero(hid),aid); });
+	{
+		if (existingArtifact.hasValue())
+		{
+			MetaString message;
+			message.appendTextID("vcmi.townWindow.blacksmith.replaceWarMachine");
+			message.replaceName(existingArtifact);
+			message.replaceName(aid);
+
+			buy->addCallback([=](){
+				GAME->interface()->showYesNoDialog(
+					message.toString(),
+					[hid, aid](){ GAME->interface()->cb->buyArtifact(GAME->interface()->cb->getHero(hid),aid); },
+					nullptr);
+			});
+
+		}
+		else
+			buy->addCallback([hid, aid](){ GAME->interface()->cb->buyArtifact(GAME->interface()->cb->getHero(hid),aid); });
+	}
 	else
 		buy->block(true);
 

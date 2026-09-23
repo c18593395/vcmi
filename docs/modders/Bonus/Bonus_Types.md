@@ -59,7 +59,7 @@ Example:
 ```json
 {
     "type" : "ON_COMBAT_EVENT",
-	"subtype" : "defend",
+	"subtype" : "combatEventDefend",
 	"addInfo" : {
 	    "effect" : [
 		    {
@@ -230,6 +230,18 @@ Determines chance for affected heroes to learn spell cast by enemy hero after ba
 ### LEARN_BATTLE_SPELL_LEVEL_LIMIT
 
 Allows affected heroes to learn spell cast by enemy hero after battle
+
+- val: maximal level of spell that can be learned
+
+### LEARN_BATTLE_SPELL_CHANCE_PRE_BATTLE
+
+Determines chance for affected heroes to learn spells from enemy hero spellbook at battle start (before first turn)
+
+- val: chance to learn each spell, percentage
+
+### LEARN_BATTLE_SPELL_LEVEL_LIMIT_PRE_BATTLE
+
+Allows affected heroes to learn spells from enemy hero spellbook at battle start (before first turn)
 
 - val: maximal level of spell that can be learned
 
@@ -665,6 +677,13 @@ Deprecated. Please use [MULTIHEX_UNIT_ATTACK](#multihex_unit_attack) instead wit
 
 Similar to `TWO_HEX_ATTACK_BREATH`, but affecting two additional hexes in a triangular formation from the target hex.
 Deprecated. Please use [MULTIHEX_UNIT_ATTACK](#multihex_unit_attack) instead with custom icon and description.
+
+### LONG_WEAPON
+
+The affected unit will always perform a melee attack from two hexes away as long as there is exactly one empty hex between attacker and target (`attacker -> empty hex -> victim`).
+
+- If attacker is adjacent to the defender, this bonus does **not** extend range and attack is resolved as normal melee.
+- Attacks performed at two-hex range do **not** allow retaliation.
 
 ### MULTIHEX_UNIT_ATTACK
 
@@ -1261,6 +1280,10 @@ Bonus that is automatically granted to unit whenever unit uses defend action in 
 Increases amount of counted marketplaces when trading in town. You may want to use PLAYER_PROPAGATOR with this bonus to make its effect player wide.
 
 - val: additional number of 'marketplaces' to reduce costs
+
+### SURRENDER_MARKETPLACE_ACCESS
+
+Allows affected hero or player to open a marketplace after failing to pay surrender cost, sell resources, and retry surrender payment. This can be granted by artifacts, global/per-hero game config bonuses, or other bonus sources.
 
 ### DEITYOFFIRE
 

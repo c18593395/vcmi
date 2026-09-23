@@ -213,7 +213,6 @@ struct DLL_LINKAGE LobbyState
 	// Before start both go into CCampaignState that is part of StartInfo
 	CampaignScenarioID campaignMap;
 	int campaignBonus;
-
 	LobbyState() : si(new StartInfo()), campaignMap(CampaignScenarioID::NONE), campaignBonus(-1) {}
 
 	template <typename Handler> void serialize(Handler &h)

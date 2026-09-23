@@ -23,6 +23,7 @@
 #include "../lib/gameState/CGameState.h"
 #include "../lib/mapping/CMapInfo.h"
 #include "../lib/serializer/GameConnection.h"
+#include <boost/range/adaptor/reversed.hpp>
 
 void ClientPermissionsCheckerNetPackVisitor::visitForLobby(CPackForLobby & pack)
 {
@@ -52,6 +53,12 @@ void ClientPermissionsCheckerNetPackVisitor::visitLobbyClientConnected(LobbyClie
 	result = srv.getState() == EServerState::LOBBY;
 }
 
+void ClientPermissionsCheckerNetPackVisitor::visitLobbyQueryState(LobbyQueryState & pack)
+{
+	// any client in lobby may query the lobby state snapshot
+	result = srv.getState() == EServerState::LOBBY;
+}
+
 void ApplyOnServerNetPackVisitor::visitLobbyClientConnected(LobbyClientConnected & pack)
 {
 	auto compatibleVersion = std::min(pack.version, ESerializationVersion::CURRENT);
@@ -68,9 +75,25 @@ void ApplyOnServerNetPackVisitor::visitLobbyClientConnected(LobbyClientConnected
 	result = true;
 }
 
+void ApplyOnServerNetPackVisitor::visitLobbyQueryState(LobbyQueryState & pack)
+{
+	// reply with a lobby snapshot for preview (mods/participants/version)
+	LobbyModsCheck response;
+	response.vcmiVersion = GameConstants::VCMI_VERSION;
+	response.mods = ModCompatibilityInfo{}; // empty map when no mod checks needed
+	for(const auto & playerEntry : srv.playerNames)
+		response.participantNames.push_back(playerEntry.second.name);
+	connection->sendPack(response);
+}
+
 void ApplyOnServerAfterAnnounceNetPackVisitor::visitLobbyClientConnected(LobbyClientConnected & pack)
 {
 	srv.updateAndPropagateLobbyState();
+}
+
+void ApplyOnServerAfterAnnounceNetPackVisitor::visitLobbyQueryState(LobbyQueryState & pack)
+{
+	// query does not mutate lobby state; nothing to propagate
 }
 
 void ClientPermissionsCheckerNetPackVisitor::visitLobbyClientDisconnected(LobbyClientDisconnected & pack)

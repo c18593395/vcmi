@@ -44,7 +44,7 @@ static bool isQuickExchangeLayoutAvailable()
 }
 
 CExchangeWindow::CExchangeWindow(ObjectInstanceID hero1, ObjectInstanceID hero2, QueryID queryID)
-	: CWindowObject(PLAYER_COLORED | BORDERED, ImagePath::builtin(isQuickExchangeLayoutAvailable() ? QUICK_EXCHANGE_BG : "TRADE2")),
+	: CWindowObject(PLAYER_COLORED | BORDERED, ImagePath::builtin(isQuickExchangeLayoutAvailable() ? QUICK_EXCHANGE_BG : (ENGINE->isRoeData() ? "TRADE" : "TRADE2"))),
 	controller(hero1, hero2)
 {
 	const bool qeLayout = isQuickExchangeLayoutAvailable();

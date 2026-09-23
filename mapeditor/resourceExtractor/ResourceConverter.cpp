@@ -18,8 +18,11 @@
 #include "BitmapHandler.h"
 #include "Animation.h"
 
+#ifdef ENABLE_SINGLE_APP_BUILD
+using namespace MapEditor;
+#endif
+
 #include <boost/filesystem/path.hpp>
-#include <boost/locale.hpp>
 
 void ResourceConverter::convertExtractedResourceFiles(ConversionOptions conversionOptions)
 {

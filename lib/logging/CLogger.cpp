@@ -99,10 +99,11 @@ DLL_LINKAGE vstd::CLoggerBase * logAnim = CLogger::getLogger(CLoggerDomain("anim
 DLL_LINKAGE vstd::CLoggerBase * logMod = CLogger::getLogger(CLoggerDomain("mod"));
 DLL_LINKAGE vstd::CLoggerBase * logStats = CLogger::getLogger(CLoggerDomain("stats"));
 DLL_LINKAGE vstd::CLoggerBase * logRng = CLogger::getLogger(CLoggerDomain("rng"));
+DLL_LINKAGE vstd::CLoggerBase * logScript = CLogger::getLogger(CLoggerDomain("script"));
 
 CLogger * CLogger::getLogger(const CLoggerDomain & domain)
 {
-	TLockGuardRec _(smx);
+	std::lock_guard _(smx);
 
 	CLogger * logger = CLogManager::get().getLogger(domain);
 	if(!logger) // Create new logger
@@ -164,7 +165,7 @@ ELogLevel::ELogLevel CLogger::getLevel() const
 
 void CLogger::setLevel(ELogLevel::ELogLevel level)
 {
-	TLockGuard _(mx);
+	std::lock_guard _(mx);
 	if (!domain.isGlobalDomain() || level != ELogLevel::NOT_SET)
 		this->level = level;
 }
@@ -173,7 +174,7 @@ const CLoggerDomain & CLogger::getDomain() const { return domain; }
 
 void CLogger::addTarget(std::unique_ptr<ILogTarget> && target)
 {
-	TLockGuard _(mx);
+	std::lock_guard _(mx);
 	targets.push_back(std::move(target));
 }
 
@@ -189,7 +190,7 @@ ELogLevel::ELogLevel CLogger::getEffectiveLevel() const
 
 void CLogger::callTargets(const LogRecord & record) const
 {
-	TLockGuard _(mx);
+	std::lock_guard _(mx);
 	for(const CLogger * logger = this; logger != nullptr; logger = logger->parent)
 		for(const auto & target : logger->targets)
 			target->write(record);
@@ -197,7 +198,7 @@ void CLogger::callTargets(const LogRecord & record) const
 
 void CLogger::clearTargets()
 {
-	TLockGuard _(mx);
+	std::lock_guard _(mx);
 	targets.clear();
 }
 
@@ -206,7 +207,7 @@ bool CLogger::isTraceEnabled() const { return getEffectiveLevel() <= ELogLevel::
 
 CLogManager & CLogManager::get()
 {
-	TLockGuardRec _(smx);
+	std::lock_guard _(smx);
 	static CLogManager instance;
 	return instance;
 }
@@ -220,13 +221,13 @@ CLogManager::~CLogManager()
 
 void CLogManager::addLogger(CLogger * logger)
 {
-	TLockGuard _(mx);
+	std::lock_guard _(mx);
 	loggers[logger->getDomain().getName()] = logger;
 }
 
 CLogger * CLogManager::getLogger(const CLoggerDomain & domain)
 {
-	TLockGuard _(mx);
+	std::lock_guard _(mx);
 	auto it = loggers.find(domain.getName());
 	if(it != loggers.end())
 		return it->second;
@@ -286,6 +287,7 @@ std::string CLogFormatter::format(const LogRecord & record) const
 
 	//Format name, thread id and message
 	boost::algorithm::replace_first(message, "%n", record.domain.getName());
+	boost::algorithm::replace_first(message, "%p", record.processId);
 	boost::algorithm::replace_first(message, "%t", record.threadId);
 	boost::algorithm::replace_first(message, "%m", record.message);
 	boost::algorithm::replace_first(message, "%c", boost::posix_time::to_simple_string(record.timeStamp));
@@ -405,7 +407,7 @@ void CLogConsoleTarget::write(const LogRecord & record)
 	}
 	else
 	{
-		TLockGuard _(mx);
+		std::lock_guard _(mx);
 		if(printToStdErr)
 			std::cerr << message << std::endl;
 		else
@@ -435,7 +437,7 @@ CLogFileTarget::CLogFileTarget(const boost::filesystem::path & filePath, bool ap
 void CLogFileTarget::write(const LogRecord & record)
 {
 	std::string message = formatter.format(record); //formatting is slow, do it outside the lock
-	TLockGuard _(mx);
+	std::lock_guard _(mx);
 	file << message << std::endl;
 }
 
@@ -452,9 +454,9 @@ LogRecord::LogRecord(const CLoggerDomain & domain, ELogLevel::ELogLevel level, c
 	level(level),
 	message(message),
 	timeStamp(boost::posix_time::microsec_clock::local_time()),
-	threadId(getThreadName())
+	threadId(getThreadName()),
+	processId(std::to_string(getpid()))
 {
-
 }
 
 VCMI_LIB_NAMESPACE_END

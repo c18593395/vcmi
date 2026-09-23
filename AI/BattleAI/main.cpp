@@ -1,11 +1,6 @@
 /*
- * main.cpp, part of VCMI engine
- *
- * Authors: listed in file AUTHORS in main folder
- *
+ * main.cpp — restored from 1.7.5 (fork removed it but runtime still LoadLibrary's BattleAI.dll)
  * License: GNU General Public License v2.0 or later
- * Full text of license available in license.txt file, in main folder
- *
  */
 #include "StdInc.h"
 #include "BattleAI.h"

@@ -45,7 +45,6 @@ public:
 	{
 		loadedPointers.clear();
 		loadedSharedPointers.clear();
-		loadedUniquePointers.clear();
 	}
 
 	bool hasFeature(Version v) const
@@ -58,7 +57,6 @@ private:
 
 	std::vector<std::string> loadedStrings;
 	std::map<uint32_t, Serializeable *> loadedPointers;
-	std::set<Serializeable *> loadedUniquePointers;
 	std::map<const Serializeable *, std::shared_ptr<Serializeable>> loadedSharedPointers;
 	IBinaryReader * reader;
 
@@ -230,9 +228,6 @@ private:
 				// We already got this pointer
 				// Cast it in case we are loading it to a non-first base pointer
 				data = dynamic_cast<T>(i->second);
-				if (vstd::contains(loadedUniquePointers, data))
-					throw std::runtime_error("Attempt to deserialize duplicated unique_ptr!");
-
 				return;
 			}
 		}
@@ -324,8 +319,6 @@ private:
 		T * internalPtr;
 		loadRawPointer(internalPtr);
 		data.reset(internalPtr);
-		if (internalPtr != nullptr)
-			loadedUniquePointers.insert(internalPtr);
 	}
 
 	template<typename T, size_t N>
@@ -427,12 +420,11 @@ private:
 	{
 		int32_t which;
 		load(which);
-		assert(which < sizeof...(TN));
 
 		// Create array of variants that contains all default-constructed alternatives
-		const std::variant<TN...> table[] = { TN{ }... };
+		std::array<std::variant<TN...>, sizeof...(TN)> table{ TN{}... };
 		// use appropriate alternative for result
-		data = table[which];
+		data = table.at(which);
 		// perform actual load via std::visit dispatch
 		std::visit([&](auto& o) { load(o); }, data);
 	}

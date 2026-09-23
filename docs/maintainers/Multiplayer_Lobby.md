@@ -1,48 +1,62 @@
 # Multiplayer lobby
 
-- RAM requirements: ~1 GB (can be potentially reduced if we were to track down all un-indexed sqlite queries)
+- RAM requirements: 512 MB (may increase over time if lobby gets more active players)
 - CPU requirements: 1 core (preferrably dedicated to ensure low latency)
 - SSD requirements: up to 4 Gb (depending on log and database size over time)
 
-Exposed to public as `beholder.vcmi.eu:3031` or `lobby.vcmi.eu:3031`
+Exposed to public as:
 
-- Start: `cd /home/vcmilobby/build/bin && ./vcmilobby &`
+- `lobby.vcmi.eu:3031` - user login
+- `beholder.vcmi.eu:3031` - old domain name for logins
+- `api.vcmi.eu` - public API access (behind Cloudflare)  
+
+- Start: `cd /home/lobby && nohup sudo -u lobby /usr/games/vcmilobby &`
 - Stop: `killall -9 vcmilobby`
-- Examine database (can be done live): `sqlite3 ~/.local/share/vcmi/vcmiLobby.db`
-- Examine log file: `nano ~/.cache/vcmi/VCMI_Lobby_log.txt`
-
-## TODO
-
-- Update lobby setup to allow running it as non-root
-- Set up PPA with lobby builds and install lobby from PPA instead of building from sources
-- Migrate lobby to new domain name (`lobby.vcmi.eu:3031`). Needs adjustment to automatically move existing login information
-- (long term) expand lobby functionality, including vcmiserver hosting for cheat-proof MP
+- Examine database (can be done live): `sqlite3 /home/lobby/.local/share/vcmi/vcmiLobby.db`
+- Examine log file: `tail -n 100 /home/lobby/cache/vcmi/VCMI_Lobby_log.txt`
 
 ## Setup
 
-```sh
-git clone https://github.com/vcmi/vcmi.git
-mkdir build
-cmake -DENABLE_EDITOR=OFF -DENABLE_CLIENT=OFF -DENABLE_SERVER=OFF -DENABLE_LAUNCHER=OFF -DENABLE_TEST=OFF -DENABLE_LOBBY=ON -DENABLE_MINIMAL_LIB=ON -DENABLE_PCH=OFF -DENABLE_STATIC_LIBS=ON ../vcmi`
-make
-```
+Preparation:
 
-Note: rebuild may take up to 15 minutes. During updates you might want to rebuild first, without shutting down server and then - quickly restart server
-Note: server has configured swap file specifically to allow building vcmilobby locally. System memory usage was slightly over 1 Gb during build.
+- Generate .deb package with lobby binaries. Currently we have "Build VCMI Lobby" job in CI that does this. Produced .deb file needs to be uploaded to server
+- Create dump of existing SQL database: `sqlite3 /home/lobby/local/share/vcmi/vcmiLobby.db ".backup 'vcmiLobbyBak.db'"`. Optionally it can be compressed via `gzip vcmiLobbyBak.db`
+- Copy database dump on new server, and decompress it if needed via `gunzip vcmiLobbyBak.db.gz`
+
+Once preparation is done, run the following commands:
+
+```sh
+apt install nginx sqlite3 sqlite3-tools
+apt install ./vcmi-lobby.deb #NOTE: name may be different
+
+useradd -m lobby
+sudo -u lobby mkdir -p /home/lobby/.local/share/vcmi/
+
+# to create new DB
+sudo -u lobby sqlite3 ~/.local/share/vcmi/vcmiLobby.db </usr/share/vcmi/config/lobby.sql
+
+# to restore existing DB
+mv vcmiLobbyBak.db /home/lobby/.local/share/vcmi/vcmiLobby.db 
+chown lobby:lobby /home/lobby/.local/share/vcmi/vcmiLobby.db 
+
+# Start lobby
+cd /home/lobby && nohup sudo -u lobby /usr/games/vcmilobby &
+```
 
 ### Upgrade
 
-```sh
-cd /home/vcmilobby/vcmi && git pull --ff-only
-cd /home/vcmilobby/build && make
-killall -9 vcmilobby
-cd /home/vcmilobby/build/bin && ./vcmilobby &
-```
+- Generate and upload new .deb package
+- Shut down old version of lobby: `killall -9 vcmilobby`
+- Install new .deb package via `apt install ./vcmi-lobby.deb`
+- Generate empty database with new schema: `sqlite3 "schema.db" < "/usr/share/vcmi/config/lobby.sql"`
+- Compare old and new databases `sqldiff --schema vcmiLobby.db schema.db > upgrade.sql`
+- Open upgrade script and edit it if necessary: `nano upgrade.sql`
+- Make sure that you have database backup: `sqlite3 /home/lobby/local/share/vcmi/vcmiLobby.db ".backup 'vcmiLobbyBak.db"`
+- Upgrade database to new schema: `sqlite3 vcmiLobby.db < upgrade.sql`
+- Re-run compare to verify that databases are now the same: `sqldiff --schema vcmiLobby.db schema.db > upgrade.sql`
+- Start new lobby server `cd /home/lobby && nohup sudo -u lobby /usr/games/vcmilobby &`
 
-#### Migration
+#### Troubleshooting
 
-- setup binary on new server
-- stop old server
-- transfer database at `~/.local/share/vcmi/vcmiLobby.db` to new server
-- adjust domain name to point to new server. WARNING: clients store login information based on DNS name. If new server has new DNS name, some code adjustments will be needed
-- start new server
+- Lobby crashes on start due to `boost::filesystem::status: Permission denied [system:13]: "config"`. Solution: `cd /home/lobby` (or any other directory writeable by `lobby` user)
+- Lobby shut downs after logout from server: ensure that `vcmilobby` was started via `nohup`

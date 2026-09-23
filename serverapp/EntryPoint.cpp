@@ -9,6 +9,8 @@
  */
 #include "StdInc.h"
 
+#include <vstd/DateUtils.h>
+
 #include "../server/CVCMIServer.h"
 
 #include "../lib/CConsoleHandler.h"
@@ -16,11 +18,212 @@
 #include "../lib/VCMIDirs.h"
 #include "../lib/GameLibrary.h"
 #include "../lib/CConfigHandler.h"
+#include "../lib/filesystem/Filesystem.h"
+#include "../lib/modding/CModHandler.h"
+#include "../lib/modding/ModManager.h"
+#include "callback/EditorCallback.h"
+#include "campaign/CampaignHandler.h"
+#include "mapping/CMap.h"
+#include "mapping/CMapService.h"
+#include "modding/ModDescription.h"
+#include "texts/CGeneralTextHandler.h"
+#include "../luascript/LuaModule.h"
 
 #include <boost/program_options.hpp>
 
+#include <vcmi/scripting/Service.h>
+
 static const std::string SERVER_NAME_AFFIX = "server";
-static const std::string SERVER_NAME = GameConstants::VCMI_VERSION + std::string(" (") + SERVER_NAME_AFFIX + ')';
+static const std::string SERVER_NAME = std::string(GameConstants::VCMI_PROJECT_NAME_VERSIONED) + " (" + SERVER_NAME_AFFIX + ')';
+
+static void exportLuaApiDocs(const boost::filesystem::path & outPath)
+{
+	auto scriptHandler = std::make_unique<scripting::LuaModule>();
+	scriptHandler->exportDocs(outPath);
+
+	logGlobal->info("Lua API documentation export complete");
+	logGlobal->info("Generated files can be found in " + outPath.string() + " directory");
+}
+
+static void generateTranslations(const std::string & modID)
+{
+	LIBRARY = new GameLibrary;
+	LIBRARY->loadFilesystem(false);
+	settings.init("config/settings.json", "vcmi:settings");
+
+	auto mods = std::make_unique<ModManager>();
+
+	std::string oldPresetName = mods->getActivePreset();
+	mods->createNewPreset("translation-export");
+	mods->activatePreset("translation-export");
+	mods = std::make_unique<ModManager>();
+	mods->tryEnableMods({modID});
+
+	for (const auto & submod : mods->getModSettings(modID))
+	{
+		try
+		{
+			if (!submod.second)
+				mods->tryEnableMods({modID + '.' + submod.first});
+		}
+		catch (const std::exception &)
+		{
+			// failed to enable mod - ignore, will be logged later
+		}
+	}
+
+	for (const auto & submod : mods->getModSettings(modID))
+		if (!submod.second)
+			logGlobal->warn("Failed to enable submod %s", submod.first);
+
+	std::map<std::string, ExportedStrings> textsByMod;
+	std::vector<std::string> modsWithOverrides;
+
+	delete LIBRARY;
+	LIBRARY = new GameLibrary;
+	LIBRARY->initializeFilesystem(false);
+	LIBRARY->initializeLibrary();
+
+	{
+		CMapService mapService;
+
+		logGlobal->info("Searching for available maps");
+		std::unordered_set<ResourcePath> mapList = CResourceHandler::get()->getFilteredFiles([&](const ResourcePath & ident)
+		{
+			return ident.getType() == EResType::MAP;
+		});
+
+		std::vector<std::unique_ptr<CMap>> loadedMaps;
+		std::vector<std::shared_ptr<CampaignState>> loadedCampaigns;
+
+		logGlobal->info("Loading maps for export");
+		for (auto const & mapName : mapList)
+		{
+			try
+			{
+				std::string mapModName = LIBRARY->modh->findResourceOrigin(mapName);
+				if (mapModName != modID && !mapModName.starts_with(modID + '.'))
+					continue;
+
+				EditorCallback cb(nullptr);
+				// load and drop loaded map - we only need loader to run over all maps
+				loadedMaps.push_back(mapService.loadMap(mapName, &cb));
+			}
+			catch(std::exception & e)
+			{
+				logGlobal->warn("Map %s is invalid. Message: %s", mapName.getName(), e.what());
+			}
+		}
+
+		logGlobal->info("Searching for available campaigns");
+		std::unordered_set<ResourcePath> campaignList = CResourceHandler::get()->getFilteredFiles([&](const ResourcePath & ident)
+		{
+			return ident.getType() == EResType::CAMPAIGN;
+		});
+
+		logGlobal->info("Loading campaigns for export");
+		for (auto const & campaignName : campaignList)
+		{
+			try
+			{
+				std::string campaignModName = LIBRARY->modh->findResourceOrigin(campaignName);
+				if (campaignModName != modID && !campaignModName.starts_with(modID + '.'))
+					continue;
+
+				loadedCampaigns.push_back(CampaignHandler::getCampaign(campaignName.getName()));
+				for (auto const & part : loadedCampaigns.back()->allScenarios())
+				{
+					EditorCallback cb(nullptr);
+					loadedCampaigns.back()->getMap(part, &cb);
+				}
+			}
+			catch(std::exception & e)
+			{
+				logGlobal->warn("Campaign %s is invalid. Message: %s", campaignName.getName(), e.what());
+			}
+		}
+
+		LIBRARY->generaltexth->exportAllTexts(textsByMod, false);
+	}
+
+	for(const auto & modEntry : textsByMod)
+	{
+		if (modEntry.first.find('.') != std::string::npos)
+		{
+			for (const auto & otherModID : modEntry.second.overridenMods)
+			{
+				if (otherModID == modID || otherModID.starts_with(modID + '.'))
+				{
+					modsWithOverrides.push_back(modEntry.first);
+					break;
+				}
+			}
+		}
+	}
+
+	const boost::filesystem::path outPath = VCMIDirs::get().userExtractedPath() / "translationFull";
+	boost::filesystem::create_directories(outPath);
+
+	mods->createNewPreset("translation-export-base");
+	mods->activatePreset("translation-export-base");
+	mods = std::make_unique<ModManager>();
+	mods->tryEnableMods({modID});
+
+	for (const auto & submod : mods->getModSettings(modID))
+	{
+		try
+		{
+			std::string fullModID = modID + '.' + submod.first;
+			bool hasOverrides = vstd::contains(modsWithOverrides, fullModID);
+			if (!submod.second && !hasOverrides)
+				mods->tryEnableMods({fullModID});
+
+			if (submod.second && hasOverrides)
+				mods->tryDisableMod(fullModID);
+		}
+		catch (const std::exception &)
+		{
+			// failed to enable mod - ignore, will be logged later
+		}
+	}
+
+
+	CResourceHandler::destroy();
+	delete LIBRARY;
+	LIBRARY = new GameLibrary;
+	LIBRARY->initializeFilesystem(false);
+	LIBRARY->initializeLibrary();
+	LIBRARY->generaltexth->exportAllTexts(textsByMod, false);
+
+	for(const auto & modEntry : textsByMod)
+	{
+		JsonNode output;
+
+		if (modEntry.first != modID && !modEntry.first.starts_with(modID + '.'))
+			continue;
+
+		for(const auto & stringEntry : modEntry.second.strings)
+			output[stringEntry.first].String() = stringEntry.second;
+
+		if (!output.isNull())
+		{
+			std::string preferredLanguage = LIBRARY->generaltexth->getPreferredLanguage();
+			std::string filename = boost::replace_all_copy(modEntry.first, ".", "/Mods/");
+			const boost::filesystem::path dirPath = outPath / filename / "Content/translation/";
+			boost::filesystem::create_directories(dirPath);
+			const boost::filesystem::path filePath = dirPath / (preferredLanguage + ".json");
+			std::ofstream file(filePath.c_str());
+			file << output.toString();
+		}
+	}
+
+	mods->activatePreset(oldPresetName);
+	mods->deletePreset("translation-export");
+	mods->deletePreset("translation-export-base");
+	logGlobal->info("Translation export complete");
+	logGlobal->info("Extracted files can be found in " + outPath.string() + " directory\n");
+
+}
 
 static void handleCommandOptions(int argc, const char * argv[], boost::program_options::variables_map & options)
 {
@@ -30,6 +233,8 @@ static void handleCommandOptions(int argc, const char * argv[], boost::program_o
 	("version,v", "display version information and exit")
 	("run-by-client", "indicate that server launched by client on same machine")
 	("dummy-run", "Shutdown immediately after loading was sucessful")
+	("translate-mod", boost::program_options::value<std::string>(), "Export translations for specified mod")
+	("export-lua-docs", boost::program_options::value<std::string>(), "Export Lua scripting API documentation to specified directory")
 	("port", boost::program_options::value<ui16>(), "port at which server will listen to connections from client")
 	("lobby", "start server in lobby mode in which server connects to a global lobby");
 
@@ -50,8 +255,9 @@ static void handleCommandOptions(int argc, const char * argv[], boost::program_o
 	if(options.count("help"))
 	{
 		auto time = std::time(nullptr);
-		printf("%s - A Heroes of Might and Magic 3 clone\n", GameConstants::VCMI_VERSION.c_str());
-		printf("Copyright (C) 2007-%d VCMI dev team - see AUTHORS file\n", std::localtime(&time)->tm_year + 1900);
+		std::tm tm = vstd::safeLocalTime(time);
+		printf("%s - A Heroes of Might and Magic 3 clone\n", GameConstants::VCMI_PROJECT_NAME_VERSIONED);
+		printf("Copyright (C) 2007-%d VCMI dev team - see AUTHORS file\n", tm.tm_year + 1900);
 		printf("This is free software; see the source for copying conditions. There is NO\n");
 		printf("warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n");
 		printf("\n");
@@ -59,9 +265,22 @@ static void handleCommandOptions(int argc, const char * argv[], boost::program_o
 		exit(0);
 	}
 
+	if(options.count("translate-mod"))
+	{
+		std::string modID = options["translate-mod"].as<std::string>();
+		generateTranslations(modID);
+		exit(0);
+	}
+
+	if(options.count("export-lua-docs"))
+	{
+		exportLuaApiDocs(options["export-lua-docs"].as<std::string>());
+		exit(0);
+	}
+
 	if(options.count("version"))
 	{
-		printf("%s\n", GameConstants::VCMI_VERSION.c_str());
+		printf("%s\n", GameConstants::VCMI_VERSION);
 		std::cout << VCMIDirs::get().genHelpString();
 		exit(0);
 	}

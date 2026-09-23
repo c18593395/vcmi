@@ -188,7 +188,7 @@ CMapOverviewWidget::CMapOverviewWidget(CMapOverview& parent):
 
 	REGISTER_BUILDER("drawMinimap", &CMapOverviewWidget::buildDrawMinimap);
 
-	addCallback("mapLayerSliderChanged", [&](int index){
+	addCallback("mapLayerSliderChanged", [this](int index){
 		OBJECT_CONSTRUCTION;
 		for (int i = 0; i < 2; i++)
 		{

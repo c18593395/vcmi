@@ -9,7 +9,6 @@
  */
 #include "StdInc.h"
 #include "BattleAttackInfo.h"
-#include "CUnitState.h"
 
 VCMI_LIB_NAMESPACE_BEGIN
 

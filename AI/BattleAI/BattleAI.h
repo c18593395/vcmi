@@ -20,8 +20,6 @@ class CSpell;
 
 VCMI_LIB_NAMESPACE_END
 
-class EnemyInfo;
-
 /*
 struct CurrentOffensivePotential
 {

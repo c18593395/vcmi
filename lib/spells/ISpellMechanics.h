@@ -31,6 +31,7 @@ class CStack;
 class CGObjectInstance;
 class CGHeroInstance;
 class IAdventureSpellEffect;
+class MetaString;
 
 namespace spells
 {
@@ -46,13 +47,10 @@ namespace vstd
 	class RNG;
 }
 
-#if SCRIPTING_ENABLED
 namespace scripting
 {
 	class Service;
 }
-#endif
-
 
 ///callback to be provided by server
 class DLL_LINKAGE SpellCastEnvironment : public ServerCallback
@@ -65,6 +63,7 @@ public:
 
 	virtual void createBoat(const int3 & visitablePosition, BoatId type, PlayerColor initiator) = 0;
 	virtual bool moveHero(ObjectInstanceID hid, int3 dst, EMovementMode mode) = 0;	//TODO: remove
+	virtual void showGarrisonDialog(ObjectInstanceID upobj, ObjectInstanceID hid, bool removableUnits, const MetaString & customTitle) = 0;
 
 	virtual void genericQuery(Query * request, PlayerColor color, std::function<void(std::optional<int32_t>)> callback) = 0;//TODO: type safety on query, use generic query packet when implemented
 };
@@ -177,7 +176,7 @@ protected:
 	ISpellMechanicsFactory(const CSpell * s);
 };
 
-class DLL_LINKAGE Mechanics
+class DLL_LINKAGE Mechanics : public scripting::ApiRawPointer<Mechanics>
 {
 public:
 	virtual ~Mechanics();
@@ -235,11 +234,15 @@ public:
 	virtual IBattleCast::Value64 getEffectValue() const = 0;
 
 	virtual PlayerColor getCasterColor() const = 0;
+	virtual BattleSide getCasterSide() const { return casterSide; };
+	virtual const CGHeroInstance * getHeroCaster() const = 0;
+	virtual const battle::Unit * getUnitCaster() const = 0;
 
 	//Spell facade
 	virtual int32_t getSpellIndex() const = 0;
 	virtual SpellID getSpellId() const = 0;
 	virtual std::string getSpellName() const = 0;
+	virtual std::string getCasterNameTextID() const = 0;
 	virtual int32_t getSpellLevel() const = 0;
 
 	virtual bool isSmart() const = 0;
@@ -264,12 +267,11 @@ public:
 
 	//Global environment facade
 	virtual const CreatureService * creatures() const = 0;
-#if SCRIPTING_ENABLED
 	virtual const scripting::Service * scripts() const = 0;
-#endif
 	virtual const Service * spells() const = 0;
 
 	virtual const CBattleInfoCallback * battle() const = 0;
+	virtual BattleID getBattleID() const = 0;
 
 	const Caster * caster;
 
@@ -290,17 +292,18 @@ public:
 	int32_t getSpellIndex() const override;
 	SpellID getSpellId() const override;
 	std::string getSpellName() const override;
+	std::string getCasterNameTextID() const override;
 	int32_t getSpellLevel() const override;
 
 	IBattleCast::Value getEffectLevel() const override;
 	IBattleCast::Value getRangeLevel() const override;
-
 	IBattleCast::Value getEffectPower() const override;
 	IBattleCast::Value getEffectDuration() const override;
-
 	IBattleCast::Value64 getEffectValue() const override;
 
 	PlayerColor getCasterColor() const override;
+	const CGHeroInstance * getHeroCaster() const override;
+	const battle::Unit * getUnitCaster() const override;
 
 	bool isSmart() const override;
 	bool isMassive() const override;
@@ -324,12 +327,11 @@ public:
 	std::vector<AimType> getTargetTypes() const override;
 
 	const CreatureService * creatures() const override;
-#if SCRIPTING_ENABLED
 	const scripting::Service * scripts() const override;
-#endif
 	const Service * spells() const override;
 
 	const CBattleInfoCallback * battle() const override;
+	BattleID getBattleID() const override;
 
 protected:
 	const CSpell * owner;
@@ -381,6 +383,8 @@ public:
 	virtual bool canBeCast(spells::Problem & problem, const IGameInfoCallback * cb, const spells::Caster * caster) const = 0;
 	virtual bool canBeCastAt(spells::Problem & problem, const IGameInfoCallback * cb, const spells::Caster * caster, const int3 & pos) const = 0;
 	virtual bool adventureCast(SpellCastEnvironment * env, const AdventureSpellCastParameters & parameters) const = 0;
+	virtual int getCastsLimit(const spells::Caster * caster, const int3 & mapSize) const = 0;
+	virtual int getCastsAlreadyPerformed(const spells::Caster * caster) const = 0;
 
 	static std::unique_ptr<IAdventureSpellMechanics> createMechanics(const CSpell * s);
 

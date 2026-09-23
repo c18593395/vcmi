@@ -16,6 +16,7 @@
 #include "BattleHero.h"
 #include "BattleObstacleController.h"
 #include "BattleProjectileController.h"
+#include "CreatureAnimation.h"
 #include "BattleRenderer.h"
 #include "BattleSiegeController.h"
 #include "BattleStacksController.h"
@@ -38,6 +39,7 @@
 #include "../../lib/battle/CPlayerBattleCallback.h"
 #include "../../lib/spells/ISpellMechanics.h"
 #include "../../lib/spells/Problem.h"
+#include "../../lib/spells/CSpell.h"
 
 namespace HexMasks
 {
@@ -81,6 +83,27 @@ namespace HexMasks
 		topLeftCorner         = 0b100011
 	};
 }
+
+/// predefined offsets for earthquake screen shake, matching H3 behavior
+static const std::array<Point, 17> earthquakeShakeOffsets = {{
+	{ 0,  0},
+	{ 2,  2},
+	{ 4,  1},
+	{ 3, -2},
+	{ 0, -6},
+	{ 2, -2},
+	{-1,  3},
+	{-5,  4},
+	{-8,  6},
+	{-5,  4},
+	{-8,  6},
+	{-4,  2},
+	{-1,  1},
+	{-3, -3},
+	{-5, -7},
+	{-7, -5},
+	{-2, -3},
+}};
 
 static const std::map<int, int> hexEdgeMaskToFrameIndex =
 {
@@ -143,6 +166,28 @@ BattleFieldController::BattleFieldController(BattleInterface & owner):
 
 	updateAccessibleHexes();
 	addUsedEvents(LCLICK | SHOW_POPUP | MOVE | TIME | GESTURE);
+}
+
+void BattleFieldController::startShakeAnimation()
+{
+	shakeFrameTotal = 17 * std::clamp(static_cast<int>(4.0f - AnimationControls::getAnimationSpeedFactor()), 1, 3);
+	shakeFrameCounter = 0;
+	shakeOffset = earthquakeShakeOffsets[0];
+}
+
+void BattleFieldController::updateShake()
+{
+	if (shakeFrameCounter >= shakeFrameTotal)
+	{
+		shakeOffset = Point(0, 0);
+		return;
+	}
+
+	shakeFrameCounter++;
+	if (shakeFrameCounter < shakeFrameTotal)
+		shakeOffset = earthquakeShakeOffsets[shakeFrameCounter % earthquakeShakeOffsets.size()];
+	else
+		shakeOffset = Point(0, 0);
 }
 
 void BattleFieldController::activate()
@@ -213,7 +258,10 @@ void BattleFieldController::showPopupWindow(const Point & cursorPosition)
 
 void BattleFieldController::renderBattlefield(Canvas & canvas)
 {
-	Canvas clippedCanvas(canvas, pos);
+	Rect renderPos = pos;
+	renderPos.x += shakeOffset.x;
+	renderPos.y += shakeOffset.y;
+	Canvas clippedCanvas(canvas, renderPos);
 
 	showBackground(clippedCanvas);
 
@@ -399,7 +447,8 @@ BattleHexArray BattleFieldController::getHighlightedHexesForMovementTarget()
 
 	if(canAttack || canCastAdjacentSpell)
 	{
-		BattleHex fromHex = owner.getBattle()->fromWhichHexAttack(stack, hoveredHex, selectAttackDirection(hoveredHex));
+		const bool allowLongWeapon = owner.actionsController->currentActionUsesLongWeapon(hoveredHex);
+		BattleHex fromHex = owner.getBattle()->fromWhichHexAttack(stack, hoveredHex, selectAttackDirection(hoveredHex), allowLongWeapon);
 		assert(fromHex.isValid());
 		if(stack->doubleWide())
 			return {fromHex, stack->occupiedHex(fromHex)};
@@ -667,7 +716,7 @@ BattleHex BattleFieldController::getHexAtPosition(Point hoverPos)
 
 	if (owner.defendingHero)
 	{
-		if (owner.attackingHero->pos.isInside(hoverPos))
+		if (owner.defendingHero->pos.isInside(hoverPos))
 			return BattleHex::HERO_DEFENDER;
 	}
 
@@ -748,6 +797,7 @@ void BattleFieldController::showAll(Canvas & to)
 
 void BattleFieldController::tick(uint32_t msPassed)
 {
+	updateShake();
 	updateAccessibleHexes();
 	owner.stacksController->tick(msPassed);
 	owner.obstacleController->tick(msPassed);

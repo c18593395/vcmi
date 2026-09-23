@@ -12,6 +12,12 @@
 
 #include "StdInc.h"
 #include "../Global.h"
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h> // ImmDisableIME (IME 屏蔽, 09-10)
+#endif
 
 #include "../client/ClientCommandManager.h"
 #include "../client/CMT.h"
@@ -101,14 +107,14 @@ static void checkForModLoadingFailure()
 
 static void prog_version()
 {
-	printf("%s\n", GameConstants::VCMI_VERSION.c_str());
+	printf("%s\n", GameConstants::VCMI_VERSION);
 	std::cout << VCMIDirs::get().genHelpString();
 }
 
 static void prog_help(const po::options_description &opts)
 {
 	auto time = std::time(nullptr);
-	printf("%s - A Heroes of Might and Magic 3 clone\n", GameConstants::VCMI_VERSION.c_str());
+	printf("%s - A Heroes of Might and Magic 3 clone\n", GameConstants::VCMI_VERSION);
 	printf("Copyright (C) 2007-%d VCMI dev team - see AUTHORS file\n", std::localtime(&time)->tm_year + 1900);
 	printf("This is free software; see the source for copying conditions. There is NO\n");
 	printf("warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n");
@@ -128,6 +134,24 @@ int main(int argc, char * argv[])
 	CAndroidVMHelper::initClassloader(SDL_AndroidGetJNIEnv());
 	// boost will crash without this
 	setenv("LANG", "C", 1);
+#endif
+
+#ifdef _WIN32
+	// 09-10: 屏蔽中文输入法(搜狗等)注入 — IME 钩子线程污染诊断现场 (踩坑 #151 根治)
+	// 必须在首个窗口创建前调用; 参数 0 = 当前线程(主 GUI 线程)。游戏 UI 无 CJK 文本输入需求。
+	// 动态加载 imm32.dll, 避免 CMake 链接变更
+	{
+		using FnImmDisableIME = BOOL(WINAPI *)(DWORD);
+		HMODULE hImm = ::GetModuleHandleW(L"imm32.dll");
+		if(!hImm)
+			hImm = ::LoadLibraryW(L"imm32.dll");
+		if(hImm)
+		{
+			auto pImmDisableIME = reinterpret_cast<FnImmDisableIME>(::GetProcAddress(hImm, "ImmDisableIME"));
+			if(pImmDisableIME)
+				pImmDisableIME(0);
+		}
+	}
 #endif
 
 #if !defined(VCMI_MOBILE)

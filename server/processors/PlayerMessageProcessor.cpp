@@ -486,9 +486,9 @@ void PlayerMessageProcessor::cheatGiveArtifacts(PlayerColor player, const CGHero
 	}
 	else
 	{
-		for(int g = 7; g < LIBRARY->arth->objects.size(); ++g) //including artifacts from mods
+		for(int g = 3; g < LIBRARY->arth->objects.size(); ++g)
 		{
-			if(LIBRARY->arth->objects[g]->canBePutAt(hero))
+			if(LIBRARY->arth->objects[g]->canBePutAt(hero) && !LIBRARY->arth->objects[g]->getWarMachine().hasValue())
 				gameHandler->giveHeroNewArtifact(hero, ArtifactID(g), ArtifactPosition::FIRST_AVAILABLE);
 		}
 	}
@@ -924,11 +924,11 @@ void PlayerMessageProcessor::executeCheatCode(const std::string & cheatName, Pla
 	auto key = getCheatKey(cheatName);
 
 	std::map<std::string, std::function<void()>> callbacks = {
-		{"giveArchangel",      [&] () {doCheatGiveArmyFixed({ "archangel",        "5" });} },
-		{"giveBlackKnight",    [&] () {doCheatGiveArmyFixed({ "blackKnight",     "10" });} },
-		{"giveCrystalDragon",  [&] () {doCheatGiveArmyFixed({ "crystalDragon", "5000" });} },
-		{"giveAzureDragon",    [&] () {doCheatGiveArmyFixed({ "azureDragon",   "5000" });} },
-		{"giveFairieDragon",   [&] () {doCheatGiveArmyFixed({ "fairieDragon",  "5000" });} },
+		{"giveArchangel",      [doCheatGiveArmyFixed] () {doCheatGiveArmyFixed({ "archangel",        "5" });} },
+		{"giveBlackKnight",    [doCheatGiveArmyFixed] () {doCheatGiveArmyFixed({ "blackKnight",     "10" });} },
+		{"giveCrystalDragon",  [doCheatGiveArmyFixed] () {doCheatGiveArmyFixed({ "crystalDragon", "5000" });} },
+		{"giveAzureDragon",    [doCheatGiveArmyFixed] () {doCheatGiveArmyFixed({ "azureDragon",   "5000" });} },
+		{"giveFairieDragon",   [doCheatGiveArmyFixed] () {doCheatGiveArmyFixed({ "fairieDragon",  "5000" });} },
 		{"giveArmy",           doCheatGiveArmyCustom                                       },
 		{"giveSpells",         doCheatGiveSpells                                           },
 		{"buildTown",          doCheatBuildTown                                            },
@@ -947,8 +947,8 @@ void PlayerMessageProcessor::executeCheatCode(const std::string & cheatName, Pla
 		{"maxMorale",          doCheatMaxMorale                                            },
 		{"god",                doCheatTheOne                                               },
 		{"giveScrolls",        doCheatGiveScrolls                                          },
-		{"color",              [&] () {doCheatColorSchemeChange(ColorScheme::H2_SCHEME);}  },
-		{"gray",               [&] () {doCheatColorSchemeChange(ColorScheme::GRAYSCALE);}  },
+		{"color",              [doCheatColorSchemeChange] () {doCheatColorSchemeChange(ColorScheme::H2_SCHEME);}  },
+		{"gray",               [doCheatColorSchemeChange] () {doCheatColorSchemeChange(ColorScheme::GRAYSCALE);}  },
 		{"skill",              doCheatSkill                                                },
 		{"teleport",           doCheatTeleport                                             },
 		{"grail",              doCheatGiveGrail                                            },

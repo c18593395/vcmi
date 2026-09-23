@@ -26,6 +26,7 @@
 #include "GraphicalPrimitiveCanvas.h"
 #include "TextControls.h"
 #include "../windows/CCastleInterface.h"
+#include "../windows/wiki/WikiWindow.h"
 #include "../windows/InfoWindows.h"
 #include "../render/Canvas.h"
 
@@ -215,10 +216,11 @@ std::string CMinorResDataBar::buildDateString()
 {
 	std::string pattern = "%s: %d, %s: %d, %s: %d";
 
+	auto calendar = GAME->interface()->cb->getCalendar();
 	auto formatted = boost::format(pattern)
-		% LIBRARY->generaltexth->translate("core.genrltxt.62") % GAME->interface()->cb->getDate(Date::MONTH)
-		% LIBRARY->generaltexth->translate("core.genrltxt.63") % GAME->interface()->cb->getDate(Date::WEEK)
-		% LIBRARY->generaltexth->translate("core.genrltxt.64") % GAME->interface()->cb->getDate(Date::DAY_OF_WEEK);
+		% LIBRARY->generaltexth->translate("core.genrltxt.62") % calendar.getMonth()
+		% LIBRARY->generaltexth->translate("core.genrltxt.63") % calendar.getWeek()
+		% LIBRARY->generaltexth->translate("core.genrltxt.64") % calendar.getDayOfWeek();
 
 	return boost::str(formatted);
 }
@@ -493,18 +495,18 @@ void CInteractableTownTooltip::init(const CGTownInstance * town)
 				std::make_shared<CCastleBuildings>(town)->enterToTheQuickRecruitmentWindow();
 		}
 	});
-	fastTavern = std::make_shared<LRClickableArea>(Rect(3, 2, 58, 64), [townId]()
 	{
-		std::vector<const CGTownInstance*> towns = GAME->interface()->cb->getTownsInfo(true);
-		for(auto & town : towns)
+		const std::string factionKey = town->getTown()->faction->getJsonKey();
+		fastWiki = std::make_shared<LRClickableArea>(Rect(3, 2, 58, 64), [factionKey]()
 		{
-			if(town->id == townId && town->hasBuilt(BuildingID::TAVERN))
-				GAME->interface()->showTavernWindow(town, nullptr, QueryID::NONE);
-		}
-	}, [town]{
-		if(!town->getFaction()->getDescriptionTranslated().empty())
-			CRClickPopup::createAndPush(town->getFaction()->getDescriptionTranslated());
-	});
+			ENGINE->windows().createAndPushWindow<WikiWindow>(
+				WikiWindow::Style::BROWN,
+				WikiEntryKey{WikiCategory::TOWN, factionKey});
+		}, [town]{
+			if(!town->getFaction()->getDescriptionTranslated().empty())
+				CRClickPopup::createAndPush(town->getFaction()->getDescriptionTranslated());
+		});
+	}
 	fastMarket = std::make_shared<LRClickableArea>(Rect(143, 31, 30, 34), []()
 	{
 		std::vector<const CGTownInstance*> towns = GAME->interface()->cb->getTownsInfo(true);

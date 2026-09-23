@@ -25,6 +25,8 @@
 #include "../../lib/texts/CGeneralTextHandler.h"
 #include "../../lib/ResourceSet.h"
 
+VCMI_LIB_USING_NAMESPACE
+
 #define DECLARE_OBJ_TYPE(x) void initialize(x*);
 #define DECLARE_OBJ_PROPERTY_METHODS(x) \
 void updateProperties(x*); \
@@ -106,6 +108,7 @@ protected:
 	QTableWidgetItem * addProperty(CGCreature::Character value);
 	QTableWidgetItem * addProperty(const std::optional<CGDwellingRandomizationInfo> & value);
 	QTableWidgetItem * addProperty(PropertyEditorPlaceholder value);
+	QTableWidgetItem * addProperty(const std::set<PlayerColor> & value);
 	
 //===============END OF DECLARATION=======================================
 	

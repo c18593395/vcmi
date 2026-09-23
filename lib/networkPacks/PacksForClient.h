@@ -29,6 +29,8 @@
 #include "../mapObjects/army/CSimpleArmy.h"
 #include "../spells/ViewSpellInt.h"
 
+#include <vcmi/scripting/ApiTags.h>
+
 class CClient;
 class CGameHandler;
 
@@ -208,7 +210,7 @@ struct DLL_LINKAGE DaysWithoutTown : public CPackForClient
 	}
 };
 
-struct DLL_LINKAGE EntitiesChanged : public CPackForClient
+struct DLL_LINKAGE EntitiesChanged : public CPackForClient, public scripting::ApiSharedPointer<EntitiesChanged>
 {
 	std::vector<EntityChanges> changes;
 
@@ -220,7 +222,7 @@ struct DLL_LINKAGE EntitiesChanged : public CPackForClient
 	}
 };
 
-struct DLL_LINKAGE SetResources : public CPackForClient
+struct DLL_LINKAGE SetResources : public CPackForClient, public scripting::ApiSharedPointer<SetResources>
 {
 	void visitTyped(ICPackVisitor & visitor) override;
 
@@ -1177,7 +1179,7 @@ struct DLL_LINKAGE HeroVisit : public CPackForClient
 	}
 };
 
-struct DLL_LINKAGE InfoWindow : public CPackForClient //103  - displays simple info window
+struct DLL_LINKAGE InfoWindow : public CPackForClient, public scripting::ApiSharedPointer<InfoWindow>
 {
 	EInfoWindowMode type = EInfoWindowMode::MODAL;
 	MetaString text;
@@ -1392,6 +1394,7 @@ struct DLL_LINKAGE GarrisonDialog : public Query
 	ObjectInstanceID objid;
 	ObjectInstanceID hid;
 	bool removableUnits = false;
+	MetaString customTitle;
 
 	void visitTyped(ICPackVisitor & visitor) override;
 
@@ -1401,6 +1404,8 @@ struct DLL_LINKAGE GarrisonDialog : public Query
 		h & objid;
 		h & hid;
 		h & removableUnits;
+		if (h.hasFeature(Handler::Version::CUSTOM_GARRISON_TITLE))
+			h & customTitle;
 	}
 };
 

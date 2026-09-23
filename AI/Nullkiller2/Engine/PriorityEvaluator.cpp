@@ -23,14 +23,20 @@
 #include "../../../lib/GameSettings.h"
 #include "../../../lib/filesystem/Filesystem.h"
 #include "../Goals/ExecuteHeroChain.h"
+#include "../Goals/AdventureSpellCast.h"
 #include "../Goals/BuildThis.h"
 #include "../Goals/StayAtTown.h"
 #include "../Goals/ExchangeSwapTownHeroes.h"
 #include "../Goals/DismissHero.h"
+#include "../../../lib/spells/CSpell.h"
+#include "../../../lib/spells/adventure/DimensionDoorEffect.h"
 #include "../Markers/UnlockCluster.h"
 #include "../Markers/HeroExchange.h"
 #include "../Markers/ArmyUpgrade.h"
 #include "../Markers/DefendTown.h"
+
+#include <vcmi/spells/Service.h>
+#include <vcmi/spells/Spell.h>
 
 namespace NK2AI
 {
@@ -39,10 +45,10 @@ constexpr float MAX_CRITICAL_VALUE = 2.0f;
 
 EvaluationContext::EvaluationContext(const Nullkiller* aiNk)
 	: movementCost(0.0),
+	movementCostByRole(),
 	manaCost(0),
 	danger(0),
 	closestWayRatio(1),
-	movementCostByRole(),
 	skillReward(0),
 	goldReward(0),
 	goldCost(0),
@@ -74,6 +80,12 @@ EvaluationContext::EvaluationContext(const Nullkiller* aiNk)
 void EvaluationContext::addNonCriticalStrategicalValue(float value)
 {
 	vstd::amax(strategicalValue, std::min(value, MAX_CRITICAL_VALUE));
+}
+
+float EvaluationContext::getMovementCost(const HeroRole role) const
+{
+	static_assert(HeroRole::SCOUT == 0 && HeroRole::MAIN == 1);
+	return movementCostByRole.at(static_cast<size_t>(role));
 }
 
 PriorityEvaluator::~PriorityEvaluator() = default;
@@ -157,7 +169,7 @@ uint64_t getDwellingArmyGrowth(CCallback * cb, const CGObjectInstance * target, 
 			// Increase priority towards the end of the week if units are lost afterwards
 			if(!cb->getSettings().getBoolean(EGameSettings::DWELLINGS_ACCUMULATE_WHEN_OWNED))
 			{
-				const auto dayOfWeek = cb->getDate(Date::DAY_OF_WEEK);
+				const auto dayOfWeek = cb->getCalendar().getDayOfWeek();
 				score *= dayOfWeek;
 			}
 		}
@@ -632,7 +644,7 @@ float RewardEvaluator::getSkillReward(const CGObjectInstance * target, const CGH
 				{
 					const spells::Spell * spell = LIBRARY->spells()->getById(spellID);
 
-					if(hero->canLearnSpell(spell) && !hero->spellbookContainsSpell(spellID))
+					if(hero->canLearnSpell(spell, true))
 					{
 						rewardValue += std::sqrt(spell->getLevel()) / 4.0f;
 					}
@@ -798,28 +810,71 @@ public:
 		int tilesDiscovered = task->value;
 		evaluationContext.addNonCriticalStrategicalValue(0.03f * tilesDiscovered);
 
-		for(const auto obj : evaluationContext.evaluator.aiNk->cc->getVisitableObjs(task->tile))
+		// Hidden exploration targets may have no visible object data yet.
+		if(evaluationContext.evaluator.aiNk->cc->isVisible(task->tile))
 		{
-			switch(obj->ID.num)
+			for(const auto obj : evaluationContext.evaluator.aiNk->cc->getVisitableObjs(task->tile))
 			{
-				case Obj::MONOLITH_ONE_WAY_ENTRANCE:
-				case Obj::MONOLITH_TWO_WAY:
-				case Obj::SUBTERRANEAN_GATE:
-					evaluationContext.explorePriority = 1;
-					break;
-				case Obj::REDWOOD_OBSERVATORY:
-				case Obj::PILLAR_OF_FIRE:
-					evaluationContext.explorePriority = 2;
-					break;
-				default:
-					logAi->warn("ExplorePointEvaluator buildEvaluationContext unknown exploration point %d", obj->ID.num);
+				switch(obj->ID.num)
+				{
+					case Obj::MONOLITH_ONE_WAY_ENTRANCE:
+					case Obj::MONOLITH_TWO_WAY:
+					case Obj::SUBTERRANEAN_GATE:
+						evaluationContext.explorePriority = 1;
+						break;
+					case Obj::REDWOOD_OBSERVATORY:
+					case Obj::PILLAR_OF_FIRE:
+						evaluationContext.explorePriority = 2;
+						break;
+					default:
+						logAi->warn("ExplorePointEvaluator buildEvaluationContext unknown exploration point %d", obj->ID.num);
+				}
 			}
-		}
 
-		if(evaluationContext.evaluator.aiNk->cc->getTile(task->tile)->roadType != RoadId::NO_ROAD)
-			evaluationContext.explorePriority = 1;
+			const TerrainTile * tile = evaluationContext.evaluator.aiNk->cc->getTile(task->tile, false);
+			if(tile && tile->roadType != RoadId::NO_ROAD)
+				evaluationContext.explorePriority = 1;
+		}
 		if(evaluationContext.explorePriority == 0)
-			evaluationContext.explorePriority = 3;
+		{
+			if(tilesDiscovered >= 20)
+				evaluationContext.explorePriority = 1;
+			else if(tilesDiscovered >= 10)
+				evaluationContext.explorePriority = 2;
+			else
+				evaluationContext.explorePriority = 3;
+		}
+	}
+};
+
+class AdventureSpellCastEvaluator : public IEvaluationContextBuilder
+{
+public:
+	void buildEvaluationContext(EvaluationContext & evaluationContext, Goals::TSubgoal task) const override
+	{
+		if(task->goalType != Goals::ADVENTURE_SPELL_CAST || !task->hero)
+			return;
+
+		const auto & adventureSpellCast = dynamic_cast<Goals::AdventureSpellCast &>(*task);
+		const CSpell * spell = adventureSpellCast.getSpell();
+
+		if(!spell)
+			return;
+
+		auto role = evaluationContext.evaluator.aiNk->heroManager->getHeroRoleOrDefaultInefficient(task->hero);
+		evaluationContext.heroRole = role;
+
+		if(auto dimensionDoorEffect = spell->getAdventureMechanics().getEffectAs<DimensionDoorEffect>(task->hero))
+		{
+			const float movementLimit = std::max(1, task->hero->movementPointsLimit());
+			const float movementSpent = std::min(
+				task->hero->movementPointsRemaining(),
+				dimensionDoorEffect->getMovementPointsTaken());
+			const float movementCost = movementSpent / movementLimit;
+
+			evaluationContext.movementCost += movementCost;
+			evaluationContext.movementCostByRole.at(static_cast<size_t>(role)) += movementCost;
+		}
 	}
 };
 
@@ -846,7 +901,7 @@ public:
 		else
 		{
 			evaluationContext.movementCost += stayAtTown.getMovementWasted();
-			evaluationContext.movementCostByRole[evaluationContext.heroRole] += stayAtTown.getMovementWasted();
+			evaluationContext.movementCostByRole.at(static_cast<size_t>(evaluationContext.heroRole)) += stayAtTown.getMovementWasted();
 		}
 	}
 };
@@ -886,8 +941,8 @@ public:
 
 		if(defendTown.getTurn() > 0 && defendTown.isCounterAttack())
 		{
-			auto ourSpeed = defendTown.hero->movementPointsLimit(true);
-			auto enemySpeed = threat.heroPtr.get()->movementPointsLimit(true);
+			auto ourSpeed = defendTown.hero->movementPointsLimit();
+			auto enemySpeed = threat.heroPtr.get()->movementPointsLimit();
 
 			if(enemySpeed > ourSpeed) multiplier *= 0.7f;
 		}
@@ -908,6 +963,7 @@ public:
 		evaluationContext.threatTurns = threat.turn;
 
 		vstd::amax(evaluationContext.danger, defendTown.getThreat().danger);
+		vstd::amax(evaluationContext.threat, defendTown.getThreat().danger);
 		addTileDanger(evaluationContext, town->visitablePos(), defendTown.getTurn(), defendTown.getDefenceStrength());
 	}
 };
@@ -935,7 +991,7 @@ public:
 		evaluationContext.movementCost += path.movementCost();
 		evaluationContext.closestWayRatio = chain.closestWayRatio;
 
-		std::map<const CGHeroInstance *, float> costsPerHero;
+		HeroMap<float> costsPerHero;
 
 		for(auto & node : path.nodes)
 		{
@@ -948,7 +1004,7 @@ public:
 		for(auto pair : costsPerHero)
 		{
 			auto role = evaluationContext.evaluator.aiNk->heroManager->getHeroRoleOrDefaultInefficient(pair.first);
-			evaluationContext.movementCostByRole[role] += pair.second;
+			evaluationContext.movementCostByRole.at(static_cast<size_t>(role)) += pair.second;
 			if (pair.second > highestCostForSingleHero)
 				highestCostForSingleHero = pair.second;
 		}
@@ -1071,7 +1127,7 @@ public:
 			evaluationContext.addNonCriticalStrategicalValue(evaluationContext.evaluator.getStrategicalValue(target) / boost);
 			evaluationContext.conquestValue += evaluationContext.evaluator.getConquestValue(target);
 			evaluationContext.goldCost += evaluationContext.evaluator.getGoldCost(target, hero, army) / boost;
-			evaluationContext.movementCostByRole[role] += objInfo.second.movementCost / boost;
+			evaluationContext.movementCostByRole.at(static_cast<size_t>(role)) += objInfo.second.movementCost / boost;
 			evaluationContext.movementCost += objInfo.second.movementCost / boost;
 
 			vstd::amax(evaluationContext.turn, objInfo.second.turn / boost);
@@ -1106,10 +1162,10 @@ public:
 		if(garrisonHero && swapCommand.getLockingReason() == HeroLockedReason::DEFENCE)
 		{
 			auto defenderRole = evaluationContext.evaluator.aiNk->heroManager->getHeroRoleOrDefaultInefficient(garrisonHero);
-			auto mpLeft = garrisonHero->movementPointsRemaining() / (float)garrisonHero->movementPointsLimit(true);
+			auto mpLeft = garrisonHero->movementPointsRemaining() / (float)garrisonHero->movementPointsLimit();
 
 			evaluationContext.movementCost += mpLeft;
-			evaluationContext.movementCostByRole[defenderRole] += mpLeft;
+			evaluationContext.movementCostByRole.at(static_cast<size_t>(defenderRole)) += mpLeft;
 			evaluationContext.heroRole = defenderRole;
 			evaluationContext.isDefend = true;
 			evaluationContext.armyInvolvement = garrisonHero->getArmyStrength();
@@ -1138,7 +1194,7 @@ public:
 		auto mpLeft = dismissedHero->movementPointsRemaining();
 
 		evaluationContext.movementCost += mpLeft;
-		evaluationContext.movementCostByRole[role] += mpLeft;
+		evaluationContext.movementCostByRole.at(static_cast<size_t>(role)) += mpLeft;
 		evaluationContext.goldCost += GameConstants::HERO_GOLD_COST + getArmyCost(dismissedHero);
 	}
 };
@@ -1157,7 +1213,7 @@ public:
 		constexpr int dailyIncomeValueFactor = 7;
 		evaluationContext.goldReward += dailyIncomeValueFactor * bi.dailyIncome.marketValue() / 2; // 7 day income but half we already have
 		evaluationContext.heroRole = HeroRole::MAIN;
-		evaluationContext.movementCostByRole[evaluationContext.heroRole] += bi.prerequisitesCount;
+		evaluationContext.movementCostByRole.at(static_cast<size_t>(evaluationContext.heroRole)) += bi.prerequisitesCount;
 		int32_t cost = bi.buildCost[EGameResID::GOLD];
 		evaluationContext.goldCost += cost;
 		evaluationContext.closestWayRatio = 1;
@@ -1240,7 +1296,7 @@ public:
 		if(bi.isMissingResources && bi.prerequisitesCount == 1)
 		{
 			evaluationContext.strategicalValue /= 3;
-			evaluationContext.movementCostByRole[evaluationContext.heroRole] += 5;
+			evaluationContext.movementCostByRole.at(static_cast<size_t>(evaluationContext.heroRole)) += 5;
 			evaluationContext.turn += 5;
 		}
 	}
@@ -1268,6 +1324,7 @@ PriorityEvaluator::PriorityEvaluator(const Nullkiller * aiNk) : aiNk(aiNk)
 	evaluationContextBuilders.push_back(std::make_shared<ExchangeSwapTownHeroesContextBuilder>());
 	evaluationContextBuilders.push_back(std::make_shared<DismissHeroContextBuilder>(aiNk));
 	evaluationContextBuilders.push_back(std::make_shared<StayAtTownManaRecoveryEvaluator>());
+	evaluationContextBuilders.push_back(std::make_shared<AdventureSpellCastEvaluator>());
 	evaluationContextBuilders.push_back(std::make_shared<ExplorePointEvaluator>());
 }
 
@@ -1342,7 +1399,14 @@ float PriorityEvaluator::evaluateConquestValue(float score, const float conquest
 float PriorityEvaluator::evaluate(Goals::TSubgoal task, int priorityTier)
 {
 	auto evaluationContext = buildEvaluationContext(task);
+	return evaluate(task, priorityTier, evaluationContext);
+}
 
+float PriorityEvaluator::evaluate(
+	Goals::TSubgoal task,
+	const int priorityTier,
+	const EvaluationContext & evaluationContext)
+{
 	const bool amIWithoutCastle = aiNk->cc->getPlayerState(aiNk->playerID)->daysWithoutCastle.has_value();
 	double result = 0;
 
@@ -1355,7 +1419,8 @@ float PriorityEvaluator::evaluate(Goals::TSubgoal task, int priorityTier)
 										 ? aiNk->settings->getMaxArmyLossTarget() * evaluationContext.powerRatio
 										 : 1.0;
 		const float maxEnemyDangerRatio = evaluationContext.powerRatio > 0 ? evaluationContext.powerRatio : 1.0;
-		const bool arriveNextWeek = aiNk->cc->getDate(Date::DAY_OF_WEEK) + evaluationContext.turn > LIBRARY->engineSettings()->getInteger(EGameSettings::GENERAL_DAYS_PER_WEEK);
+		auto calendar = aiNk->cc->getCalendar();
+		const bool arriveNextWeek = calendar.getDayOfWeek() + evaluationContext.turn > calendar.getDaysInWeek();
 
 #if NK2AI_TRACE_LEVEL >= 2
 		logAi->trace(
@@ -1368,8 +1433,8 @@ float PriorityEvaluator::evaluate(Goals::TSubgoal task, int priorityTier)
 			evaluationContext.armyLossRatio,
 			maxWillingToLose,
 			static_cast<int>(evaluationContext.turn),
-			evaluationContext.movementCostByRole[HeroRole::MAIN],
-			evaluationContext.movementCostByRole[HeroRole::SCOUT],
+			evaluationContext.getMovementCost(HeroRole::MAIN),
+			evaluationContext.getMovementCost(HeroRole::SCOUT),
 			evaluationContext.armyInvolvement,
 			evaluationContext.goldReward,
 			evaluationContext.goldCost,
@@ -1425,7 +1490,8 @@ float PriorityEvaluator::evaluate(Goals::TSubgoal task, int priorityTier)
 					return 0;
 				if(evaluationContext.isEnemy && evaluationContext.turn > 0)
 					return 0;
-				if(evaluationContext.threatTurns <= evaluationContext.turn)
+				const bool canPrepareForNextTurnThreat = evaluationContext.turn == 0 && evaluationContext.threatTurns == 1;
+				if(evaluationContext.threatTurns <= evaluationContext.turn || canPrepareForNextTurnThreat)
 				{
 					// TODO: Mircea: Too many heroes are rushing for INSTADEFEND.
 					// We need some kind of smart selection of who to go, not everyone qualified
@@ -1676,8 +1742,8 @@ float PriorityEvaluator::evaluate(Goals::TSubgoal task, int priorityTier)
 		task->toString(),
 		evaluationContext.armyLossRatio,
 		static_cast<int>(evaluationContext.turn),
-		evaluationContext.movementCostByRole[HeroRole::MAIN],
-		evaluationContext.movementCostByRole[HeroRole::SCOUT],
+		evaluationContext.getMovementCost(HeroRole::MAIN),
+		evaluationContext.getMovementCost(HeroRole::SCOUT),
 		evaluationContext.armyInvolvement,
 		evaluationContext.goldReward,
 		evaluationContext.goldCost,

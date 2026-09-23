@@ -13,7 +13,8 @@ cmake_minimum_required(VERSION 3.16)
 project(h3m2vmap LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS ON)  # gnu++20 匹配 libvcmi.so (#290 ABI 不匹配修复)
+set(CMAKE_BUILD_TYPE RelWithDebInfo)  # -O2 -g -DNDEBUG 匹配 libvcmi.so
 
 set(VCMI_SOURCE_DIR "/home/administrator/vcmi-native" CACHE PATH "vcmi-native 源码根 (仅头文件引用)")
 set(VCMI_LIB_DIR "/home/administrator/vcmi-native/rel/bin" CACHE PATH "已编译 libvcmi.so 所在目录 (只读引用, 禁覆盖)")
@@ -28,6 +29,11 @@ target_include_directories(h3m2vmap PRIVATE
 )
 
 find_package(Boost 1.66 REQUIRED COMPONENTS program_options filesystem system)
+target_compile_definitions(h3m2vmap PRIVATE
+        BOOST_FILESYSTEM_DYN_LINK BOOST_FILESYSTEM_NO_LIB
+        BOOST_PROGRAM_OPTIONS_DYN_LINK BOOST_PROGRAM_OPTIONS_NO_LIB
+        VCMI_DLL=1
+        VCMI_VERSION_MAJOR=1 VCMI_VERSION_MINOR=8 VCMI_VERSION_PATCH=0)
 target_link_libraries(h3m2vmap PRIVATE
 	${VCMI_LIB_DIR}/libvcmi.so
 	Boost::program_options

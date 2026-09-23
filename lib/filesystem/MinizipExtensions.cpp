@@ -227,6 +227,13 @@ int ZCALLBACK CProxyIOApi::errorFileProxy(voidpf opaque, voidpf stream)
 
 CInputOutputStream * CProxyIOApi::openFile(const boost::filesystem::path & filename, int mode)
 {
+	// Phase A: null check before any access
+	if (!data) {
+		// logGlobal may not be initialized; use stderr
+		fprintf(stderr, "CProxyIOApi: null data pointer for %s\n", filename.string().c_str());
+		return nullptr;
+	}
+
 	logGlobal->trace("CProxyIOApi: stream opened for %s with mode %d", filename.string(), mode);
 
 	data->seek(0);
@@ -260,6 +267,12 @@ zlib_filefunc64_def CProxyROIOApi::getApiStructure()
 
 CInputStream * CProxyROIOApi::openFile(const boost::filesystem::path& filename, int mode)
 {
+	// Phase A: null check before any access
+	if (!data) {
+		fprintf(stderr, "CProxyROIOApi: null data pointer for %s\n", filename.string().c_str());
+		return nullptr;
+	}
+
 	logGlobal->trace("CProxyROIOApi: stream opened for %s with mode %d", filename.string(), mode);
 
 	data->seek(0);

@@ -27,10 +27,9 @@
 #include "../../lib/networkPacks/PacksForClientBattle.h"
 #include "../../lib/networkPacks/SetStackEffect.h"
 #include "../../lib/spells/AbilityCaster.h"
-#include "../../lib/spells/CSpellHandler.h"
 #include "../../lib/spells/ISpellMechanics.h"
 #include "../../lib/spells/Problem.h"
-#include "Global.h"
+#include "../../lib/spells/CSpell.h"
 
 #include <vstd/RNG.h>
 
@@ -248,7 +247,7 @@ bool BattleActionProcessor::doAttackAction(const CBattleInfoCallback & battle, c
 
 	if (movementResult.invalidRequest)
 	{
-		gameHandler->complain("Stack failed attack - unable to reach target!");
+		gameHandler->complain("Stack failed attack - unable to reach target!: dest=" + std::to_string(destinationTile.toInt()) + ", attackPos=" + std::to_string(attackPos.toInt()) + ", stack=" + stack->getDescription() + ", destinationStack=" + (destinationStack ? destinationStack->getDescription() : "nullptr"));
 		return false;
 	}
 
@@ -266,11 +265,14 @@ bool BattleActionProcessor::doAttackAction(const CBattleInfoCallback & battle, c
 
 	if(!destinationStack)
 	{
-		gameHandler->complain("Unit can not attack itself");
+		gameHandler->complain("Unit can not attack itself: dest=" + std::to_string(destinationTile.toInt()) + ", attackPos=" + std::to_string(attackPos.toInt()) + ", stack=" + stack->getDescription() + ", destinationStack=" + (destinationStack ? destinationStack->getDescription() : "nullptr"));
 		return false;
 	}
 
-	if(!CStack::isMeleeAttackPossible(stack, destinationStack))
+	const bool regularMeleeAttack = CStack::isMeleeAttackPossible(stack, destinationStack);
+	const bool longWeaponAttack = battle.isLongWeaponAttack(stack, destinationStack);
+
+	if(!regularMeleeAttack && !longWeaponAttack)
 	{
 		gameHandler->complain("Attack cannot be performed!");
 		return false;
@@ -298,7 +300,7 @@ bool BattleActionProcessor::doAttackAction(const CBattleInfoCallback & battle, c
 	for (int i = 0; i < totalAttacks; ++i)
 	{
 		//first strike
-		if(i == 0 && firstStrike && destinationStack->ableToRetaliate() && !stack->hasBonusOfType(BonusType::BLOCKS_RETALIATION) && !stack->isInvincible())
+		if(i == 0 && firstStrike && destinationStack->ableToRetaliate() && !stack->hasBonusOfType(BonusType::BLOCKS_RETALIATION) && !stack->isInvincible() && !longWeaponAttack)
 		{
 			makeAttack(battle, destinationStack, stack, 0, stack->getPosition(), true, false, true);
 		}
@@ -326,6 +328,7 @@ bool BattleActionProcessor::doAttackAction(const CBattleInfoCallback & battle, c
 		if(stack->alive()
 			&& !stack->hasBonusOfType(BonusType::BLOCKS_RETALIATION)
 			&& !stack->isInvincible()
+			&& !longWeaponAttack
 			&& (i == 0 && !firstStrike)
 			&& destinationStack->ableToRetaliate())
 		{
@@ -633,6 +636,8 @@ bool BattleActionProcessor::doWalkAndSpellcastAction(const CBattleInfoCallback &
 	parameters.setSpellLevel(std::max(0, bonus->val));
 	parameters.cast(gameHandler->spellcastEnvironment(), spellTarget);
 
+	processBattleEventTriggers(battle, CombatEventType::UNIT_SPELLCAST, stack, nullptr);
+
 	return true;
 }
 
@@ -793,7 +798,8 @@ BattleActionProcessor::MovementResult BattleActionProcessor::moveStack(const CBa
 
 	if (pathDistance > unitMovementRange)
 	{
-		gameHandler->complain("Given destination is not reachable!");
+		gameHandler->complain("Given destination is not reachable!: " + std::to_string(start.toInt()) + " -> " + std::to_string(dest.toInt()) + " by " + currentUnit->getDescription());
+		auto [unitPath, pathDistance] = battle.getPath(start, dest, currentUnit);
 		return { 0, false, true };
 	}
 
@@ -883,17 +889,8 @@ BattleActionProcessor::MovementResult BattleActionProcessor::moveStack(const CBa
 				auto hex = unitPath[i];
 				if (!openGateAtHex.isValid() && dbState != EGateState::OPENED)
 				{
-					if (needOpenGates(hex))
+					if (needOpenGates(hex) || needOpenGates(currentUnit->occupiedHex(hex)))
 						openGateAtHex = unitPath[i+1];
-
-					//TODO we need find better way to handle double-wide stacks
-					//currently if only second occupied stack part is standing on gate / bridge hex then stack will start to wait for bridge to lower before it's needed. Though this is just a visual bug.
-					if (currentUnit->doubleWide() && i + 2 < unitPath.size())
-					{
-						BattleHex otherHex = currentUnit->occupiedHex(hex);
-						if (otherHex.isValid() && needOpenGates(otherHex))
-							openGateAtHex = unitPath[i+2];
-					}
 
 					//gate may be opened and then closed during stack movement, but not other way around
 					if (openGateAtHex.isValid())
@@ -1145,8 +1142,8 @@ void BattleActionProcessor::makeAttack(const CBattleInfoCallback & battle, const
 	attackerState->afterAttack(ranged, counter);
 
 	{
-		UnitChanges info(attackerState->unitId(), UnitChanges::EOperation::RESET_STATE);
-		attackerState->save(info.data);
+		UnitChanges info(attackerState->unitId(), UnitChanges::EOperation::UPDATE);
+		info.data = attackerState->save();
 		bat.attackerChanges.changedStacks.push_back(info);
 	}
 

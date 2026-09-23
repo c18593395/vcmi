@@ -14,6 +14,7 @@
 #include "../../../lib/mapObjects/MapObjects.h"
 #include "../../../lib/spells/ISpellMechanics.h"
 #include "../../../lib/spells/adventure/TownPortalEffect.h"
+#include "../../../lib/spells/CSpell.h"
 #include "../Engine/Nullkiller.h"
 #include "mapping/CMapHeader.h"
 
@@ -109,13 +110,13 @@ void HeroManager::update()
 {
 	logAi->trace("Start analysing our heroes");
 
-	std::map<const CGHeroInstance *, float> scores;
+	HeroMap<float> scores;
 	auto myHeroes = cc->getHeroesInfo();
 
 	for(auto & hero : myHeroes)
 	{
 		scores[hero] = evaluateFightingStrength(hero);
-		knownFightingStrength[hero->id] = hero->getHeroStrength();
+		knownFightingStrength[hero->id] = normalizeHeroStrength(hero->getHeroStrength());
 	}
 
 	auto scoreSort = [&](const CGHeroInstance * h1, const CGHeroInstance * h2) -> bool
@@ -123,7 +124,7 @@ void HeroManager::update()
 		return scores.at(h1) > scores.at(h2);
 	};
 
-	const int biggerMapFactor = cc->getDate(Date::DAY) > 21 ? cc->getMapSize().x / CMapHeader::MAP_SIZE_LARGE : 0;
+	const int biggerMapFactor = cc->getCalendar().getCurrentDay() > 21 ? cc->getMapSize().x / CMapHeader::MAP_SIZE_LARGE : 0;
 	// One per town + static bonus on bigger maps after some weeks
 	int globalMainCount = std::max(static_cast<int>(cc->getTownsInfo().size()) + biggerMapFactor, 1);
 	// If 1 town but big map, limit a bit to don't spread the army too much
@@ -217,7 +218,7 @@ float HeroManager::getFightingStrengthCached(const CGHeroInstance * hero) const
 	auto cached = knownFightingStrength.find(hero->id);
 
 	//FIXME: fallback to hero->getFightingStrength() is VERY slow on higher difficulties (no object graph? map reveal?)
-	return cached != knownFightingStrength.end() ? cached->second : hero->getHeroStrength();
+	return normalizeHeroStrength(cached != knownFightingStrength.end() ? cached->second : hero->getHeroStrength());
 }
 
 float HeroManager::getMagicStrength(const CGHeroInstance * hero) const

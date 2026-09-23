@@ -79,12 +79,12 @@
 				},
 				"language" : {
 					"type" : "string",
-					"enum" : [ "english", "belarusian", "bulgarian", "czech", "chinese", "dutch", "filipino", "finnish", "french", "german", "greek", "hungarian", "italian", "japanese", "korean", "latvian", "norwegian", "polish", "portuguese", "romanian", "russian", "serbian", "spanish", "swedish", "turkish", "ukrainian", "vietnamese" ],
+					"enum" : [ "english", "belarusian", "bulgarian", "czech", "chinese", "tchinese", "dutch", "filipino", "finnish", "french", "german", "greek", "hungarian", "italian", "japanese", "korean", "latvian", "norwegian", "polish", "portuguese", "romanian", "russian", "serbian", "spanish", "swedish", "turkish", "ukrainian", "vietnamese" ],
 					"default" : "english"
 				},
 				"gameDataLanguage" : {
 					"type" : "string",
-					"enum" : [ "auto", "english", "belarusian", "bulgarian", "czech", "chinese", "dutch", "filipino", "finnish", "french", "german", "greek", "hungarian", "italian", "japanese", "korean", "latvian", "norwegian", "polish", "portuguese", "romanian", "russian", "serbian", "spanish", "swedish", "turkish", "ukrainian", "vietnamese" ],
+					"enum" : [ "auto", "english", "belarusian", "bulgarian", "czech", "chinese", "tchinese", "dutch", "filipino", "finnish", "french", "german", "greek", "hungarian", "italian", "japanese", "korean", "latvian", "norwegian", "polish", "portuguese", "romanian", "russian", "serbian", "spanish", "swedish", "turkish", "ukrainian", "vietnamese" ],
 					"default" : "auto"
 				},
 				"lastSave" : {
@@ -595,12 +595,7 @@
 				"seed" : {
 					"type" : "number",
 					"default" : 0
-				},
-			"ML" : {
-				"type" : "object",
-				"additionalProperties" : true,
-				"default" : {}
-			},
+				}
 			}
 		},
 		"ai" : {
@@ -611,12 +606,12 @@
 			"properties" : {
 				"adventureAlliedAI" : {
 					"type" : "string",
-					"enum" : [ "EmptyAI", "Nullkiller2" ],
+					"enum" : [ "EmptyAI", "Nullkiller2", "ModelAI" ],
 					"default" : "Nullkiller2"
 				},
 				"adventureEnemyAI" : {
 					"type" : "string",
-					"enum" : [ "EmptyAI", "Nullkiller2" ],
+					"enum" : [ "EmptyAI", "Nullkiller2", "ModelAI" ],
 					"default" : "Nullkiller2"
 				},
 				"combatEnemyAI" : {
@@ -715,6 +710,7 @@
 			"default" : {},
 			"additionalProperties" : false,
 			"required" : [ 
+				"mainWindow",
 				"setupCompleted", 
 				"defaultRepositoryEnabled",
 				"defaultRepositoryURL",
@@ -775,6 +771,26 @@
 					"defaultAndroid": false,
 					"defaultDesktop" : true
 
+				},
+				"mainWindow" : {
+					"type" : "object",
+					"default" : {},
+					"additionalProperties" : false,
+					"required" : [ "geometry" ],
+					"properties" : {
+						"geometry" : {
+							"type" : "object",
+							"default" : {},
+							"additionalProperties" : false,
+							"required" : [ "x", "y", "width", "height" ],
+							"properties" : {
+								"x" : { "type" : "integer", "default" : 0 },
+								"y" : { "type" : "integer", "default" : 0 },
+								"width" : { "type" : "integer", "default" : 0 },
+								"height" : { "type" : "integer", "default" : 0 }
+							}
+						}
+					}
 				}
 			}
 		},
@@ -790,7 +806,7 @@
 				},
 				"hostname" : {
 					"type" : "string",
-					"default" : "beholder.vcmi.eu"
+					"default" : "lobby.vcmi.eu"
 				},
 				"port" : {
 					"type" : "number",

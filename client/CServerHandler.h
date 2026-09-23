@@ -31,6 +31,7 @@ struct ClientPlayer;
 struct CPackForLobby;
 struct CPackForServer;
 struct CPackForClient;
+struct LobbyModsCheck;
 
 class HighScoreParameter;
 
@@ -113,6 +114,8 @@ class CServerHandler final : public IServerAPI, public LobbyInfo, public INetwor
 	std::thread threadNetwork;
 
 	std::atomic<EClientState> state;
+	bool lobbyPreviewMode = false;
+	std::function<void()> onLobbyPreviewJoin;
 
 	AICombatOptions aiCombatOptions;
 
@@ -145,6 +148,7 @@ public:
 	ESelectionScreen screenType; // To create lobby UI only after server is setup
 	EServerMode serverMode;
 	ELoadMode loadMode; // For saves filtering in SelectionTab
+	bool hotseatMode;
 	bool battleMode;
 	////////////////////
 
@@ -174,6 +178,7 @@ public:
 
 	bool isHost() const;
 	bool isGuest() const;
+	bool hasRemoteClientInLobby() const;
 	bool inLobbyRoom() const;
 	bool inGame() const;
 
@@ -216,6 +221,8 @@ public:
 	std::optional<std::string> canQuickLoadGame(const std::string & path) const; // returns reason why not compatible, or nullopt if can
 	void quickLoadGame(const std::string & path);
 	void showHighScoresAndEndGameplay(PlayerColor player, bool victory, const StatisticDataSet & statistic);
+	void stopNetwork();
+	void waitForNetworkThread();
 	void endNetwork();
 	void endGameplay();
 	void restartGameplay();
@@ -230,4 +237,7 @@ public:
 	void visitForClient(CPackForClient & clientPack);
 
 	void sendGamePack(const CPackForServer & pack) const;
+
+	void startLobbyPreview(const std::string & addr, ui16 port, std::function<void()> onJoin);
+	void onLobbyPreviewResponse(LobbyModsCheck & pack);
 };

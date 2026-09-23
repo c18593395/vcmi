@@ -18,12 +18,14 @@ set(vcmiservercommon_SRCS
 		processors/TurnOrderProcessor.cpp
 
 		CGameHandler.cpp
+		strategic_state.cpp
 		GlobalLobbyProcessor.cpp
 		ServerSpellCastEnvironment.cpp
 		CVCMIServer.cpp
 		NetPacksServer.cpp
 		NetPacksLobbyServer.cpp
 		TurnTimerHandler.cpp
+		TurnStartVisitScheduler.cpp
 )
 
 set(vcmiservercommon_HEADERS
@@ -39,6 +41,7 @@ set(vcmiservercommon_HEADERS
 		queries/MapQueries.h
 		queries/VisitQueries.h
 		queries/QueriesProcessor.h
+		queries/IQueryStackListener.h
 
 		processors/HeroPoolProcessor.h
 		processors/NewTurnProcessor.h
@@ -53,15 +56,20 @@ set(vcmiservercommon_HEADERS
 		LobbyNetPackVisitors.h
 		ServerNetPackVisitors.h
 		TurnTimerHandler.h
+		TurnStartVisitScheduler.h
 )
 
 assign_source_group(${vcmiservercommon_SRCS} ${vcmiservercommon_HEADERS})
 
 add_library(vcmiservercommon STATIC ${vcmiservercommon_SRCS} ${vcmiservercommon_HEADERS})
-set(vcmiservercommon_LIBS vcmi)
+# Tests can embed AI object libraries directly, so server common must consume
+# the core library interface without also pulling the facade and its objects.
+set(vcmiservercommon_LIBS
+	$<TARGET_PROPERTY:vcmiMain,INTERFACE_LINK_LIBRARIES>
+)
 
 if(CMAKE_SYSTEM_NAME MATCHES FreeBSD OR HAIKU)
-	set(vcmiservercommon_LIBS execinfo ${vcmiservercommon_LIBS})
+	list(APPEND vcmiservercommon_LIBS execinfo)
 endif()
 
 if(ENABLE_ML)
@@ -75,6 +83,11 @@ target_link_libraries(vcmiservercommon PRIVATE ${vcmiservercommon_LIBS} minizip:
 
 target_include_directories(vcmiservercommon
 	PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
+	PRIVATE $<TARGET_PROPERTY:vcmiMain,INTERFACE_INCLUDE_DIRECTORIES>
+)
+
+target_compile_definitions(vcmiservercommon
+	PRIVATE $<TARGET_PROPERTY:vcmiMain,INTERFACE_COMPILE_DEFINITIONS>
 )
 
 if(WIN32)
@@ -83,6 +96,10 @@ if(WIN32)
 			OUTPUT_NAME "VCMI_vcmiservercommon"
 			PROJECT_LABEL "VCMI_vcmiservercommon"
 	)
+	if (MINGW)
+		# Link Windows system libs: WinSock2 (ws2_32)
+		target_link_libraries(vcmiservercommon PRIVATE ws2_32)
+	endif()
 endif()
 
 vcmi_set_output_dir(vcmiservercommon "")

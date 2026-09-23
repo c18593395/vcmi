@@ -8,6 +8,30 @@
  *
  */
 #include "StdInc.h"
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef NOGDI
+#define NOGDI
+#endif
+#ifndef NOUSER
+#define NOUSER
+#endif
+#ifndef NOKERNEL
+#define NOKERNEL
+#endif
+#ifndef NOSOUND
+#define NOSOUND
+#endif
+#include <windows.h> // [THREAD] 插桩 GetCurrentThreadId (09-09)
+#undef IGNORE // winbase.h 定义 IGNORE 宏, 撞 Canvas.h 的 CanvasScalingPolicy::IGNORE
+#else
+static inline unsigned long GetCurrentThreadId() { return 0; }
+#endif
 #include "BattleInterface.h"
 
 #include "BattleActionsController.h"
@@ -48,6 +72,7 @@
 #include "../../lib/gameState/InfoAboutArmy.h"
 #include "../../lib/mapObjects/CGTownInstance.h"
 #include "../../lib/networkPacks/PacksForClientBattle.h"
+#include "../../lib/spells/CSpell.h"
 #include "../../lib/texts/CGeneralTextHandler.h"
 
 BattleInterface::BattleInterface(const BattleID & battleID, const CCreatureSet *army1, const CCreatureSet *army2,
@@ -528,9 +553,9 @@ void BattleInterface::displayBattleLog(const std::vector<MetaString> & battleLog
 	}
 }
 
-void BattleInterface::displaySpellAnimationQueue(const CSpell * spell, const CSpell::TAnimationQueue & q, const BattleHex & destinationTile, bool isHit)
+void BattleInterface::displaySpellAnimationQueue(const CSpell * spell, const SpellAnimationQueue & q, const BattleHex & destinationTile, bool isHit)
 {
-	for(const CSpell::TAnimation & animation : q)
+	for(const auto & animation : q)
 	{
 		if(animation.pause > 0)
 			stacksController->addNewAnim(new DummyAnimation(*this, animation.pause));
@@ -776,7 +801,10 @@ void BattleInterface::requestAutofightingAIToTakeAction()
 			std::thread aiThread([localBattleID = battleID, localCurInt = curInt, activeStack]()
 			{
 				setThreadName("autofightingAI");
+				// 0909 插桩: autofighting 线程生命周期 (detached - 死锁 owner 嫌疑)
+				fprintf(stderr, "[THREAD] autofightingAI ENTER tid=%lu\n", GetCurrentThreadId()); fflush(stderr);
 				localCurInt->autofightingAI->activeStack(localBattleID, activeStack);
+				fprintf(stderr, "[THREAD] autofightingAI EXIT tid=%lu\n", GetCurrentThreadId()); fflush(stderr);
 			});
 			aiThread.detach();
 		}

@@ -29,7 +29,8 @@ enum class ELanguages
 	BELARUSIAN,
 	BULGARIAN,
 	CZECH,
-	CHINESE,
+	CHINESE_SIMPLIFIED,
+	CHINESE_TRADITIONAL,
 	DUTCH,
 	ENGLISH,
 	FILIPINO,
@@ -92,12 +93,13 @@ struct Options
 
 inline const auto & getLanguageList()
 {
-	static const std::array<Options, 27> languages
+	static const std::array<Options, 28> languages
 	{ {
 		{ "belarusian",  "Belarusian",  "Беларускі",    "CP1251",      "be_BY", "be", "bel", "%d.%m.%Y %H:%M",    EPluralForms::UK_3, true },
 		{ "bulgarian",   "Bulgarian",   "Български",    "CP1251",      "bg_BG", "bg", "bul", "%d.%m.%Y %H:%M",    EPluralForms::EN_2, true },
 		{ "czech",       "Czech",       "Čeština",      "CP1250",      "cs_CZ", "cs", "cze", "%d.%m.%Y %H:%M",    EPluralForms::CZ_3, true },
-		{ "chinese",     "Chinese",     "简体中文",      "GBK",         "zh_CN", "zh", "chi", "%Y-%m-%d %H:%M",    EPluralForms::VI_1, true }, // Note: actually Simplified Chinese
+		{ "chinese",     "Simplified Chinese", "简体中文",  "GBK",      "zh_CN", "zh-CN", "chi", "%Y-%m-%d %H:%M", EPluralForms::VI_1, true },
+		{ "tchinese",    "Traditional Chinese", "正體字",   "GBK",      "zh_TW", "zh-TW", "chi", "%Y-%m-%d %H:%M", EPluralForms::VI_1, true },
 		{ "dutch",       "Dutch",       "Nederlands",   "CP1252",      "nl_NL", "nl", "nld", "%Y-%m-%d %H:%M",    EPluralForms::EN_2, true },
 		{ "english",     "English",     "English",      "CP1252",      "en_US", "en", "eng", "%Y-%m-%d %H:%M",    EPluralForms::EN_2, true }, // English uses international date/time format here
 		{ "filipino",    "Filipino",    "Pilipino",     "CP1252",      "fil_FIL","fil","fil","%Y-%m-%d %H:%M",    EPluralForms::EN_2, true },
@@ -107,7 +109,7 @@ inline const auto & getLanguageList()
 		{ "greek",       "Greek",       "ελληνικά",     "CP1253",      "el_GR", "el", "ell", "%d/%m/%Y %H:%M",    EPluralForms::EN_2, true },
 		{ "hungarian",   "Hungarian",   "Magyar",       "CP1250",      "hu_HU", "hu", "hun", "%Y. %m. %d. %H:%M", EPluralForms::EN_2, true },
 		{ "italian",     "Italian",     "Italiano",     "CP1250",      "it_IT", "it", "ita", "%d/%m/%Y %H:%M",    EPluralForms::EN_2, true },
-		{ "japanese",    "Japanese",    "日本語",        "JIS",         "ja_JP", "ja", "jpn", "%Y年%m月%d日 %H:%M", EPluralForms::VI_1, true },
+		{ "japanese",    "Japanese",    "日本語",        "CP932",       "ja_JP", "ja", "jpn", "%Y年%m月%d日 %H:%M", EPluralForms::VI_1, true },
 		{ "korean",      "Korean",      "한국어",        "CP949",       "ko_KR", "ko", "kor", "%Y-%m-%d %H:%M",    EPluralForms::VI_1, true },
 		{ "latvian",     "Latvian",     "Latviešu",     "CP1257",      "lv_LV", "lv", "lva", "%d.%m.%Y %H:%M",    EPluralForms::PL_3, true },
 		{ "norwegian",   "Norwegian",   "Norsk Bokmål", "UTF-8",       "nb_NO", "nb", "nor", "%d/%m/%Y %H:%M",    EPluralForms::EN_2, false },

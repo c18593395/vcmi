@@ -17,7 +17,6 @@
 #include "../../lib/CCreatureHandler.h"
 #include "../../lib/callback/CAdventureAI.h"
 #include "../../lib/mapObjects/MiscObjects.h"
-#include "../../lib/spells/CSpellHandler.h"
 #include "Pathfinding/AIPathfinder.h"
 #include "Engine/Nullkiller.h"
 
@@ -42,7 +41,7 @@ class AIStatus
 	bool ongoingChannelProbing; // true if AI currently explore bidirectional teleport channel exits
 
 	bool havingTurn;
-	int turnCounter = 0;   // ML fix (ring6): incremented per startedTurn, lets endTurn() detect stale turn
+	int turnCounter = 0; // ML fix (ring6): do-while endTurn 退出判据 (cpp 实现已有, h 声明缺失致编译失败)
 
 public:
 	AIStatus(AIGateway * aiGw);
@@ -99,7 +98,7 @@ public:
 	void heroGotLevel(const CGHeroInstance * hero, PrimarySkill pskill, std::vector<SecondarySkill> & skills, QueryID queryID) override; //pskill is gained primary skill, interface has to choose one of given skills and call callback with selection id
 	void commanderGotLevel(const CCommanderInstance * commander, std::vector<ui32> skills, QueryID queryID) override; //TODO
 	void showBlockingDialog(const std::string & text, const std::vector<Component> & components, QueryID askID, const int soundID, bool selection, bool cancel, bool safeToAutoaccept) override; //Show a dialog, player must take decision. If selection then he has to choose between one of given components, if cancel he is allowed to not choose. After making choice, CCallback::selectionMade should be called with number of selected component (1 - n) or 0 for cancel (if allowed) and askID.
-	void showGarrisonDialog(const CArmedInstance * up, const CGHeroInstance * down, bool removableUnits, QueryID queryID) override; //all stacks operations between these objects become allowed, interface has to call onEnd when done
+	void showGarrisonDialog(const CArmedInstance * up, const CGHeroInstance * down, bool removableUnits, QueryID queryID, const MetaString & customTitle) override; //all stacks operations between these objects become allowed, interface has to call onEnd when done
 	void showTeleportDialog(const CGHeroInstance * hero, TeleportChannelID channel, TTeleportExitsList exits, bool impassable, QueryID askID) override;
 	void showMapObjectSelectDialog(QueryID askID, const Component & icon, const MetaString & title, const MetaString & description, const std::vector<ObjectInstanceID> & objects) override;
 	void finish() override;

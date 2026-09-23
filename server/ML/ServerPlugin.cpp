@@ -14,6 +14,7 @@
 // limitations under the License.
 // =============================================================================
 
+#include "StdInc.h"
 #include "ServerPlugin.h"
 #include "BattleFieldHandler.h"
 #include "Global.h"
@@ -252,8 +253,12 @@ namespace {
                 {
                     if (player1.find(name1) == player1.end())
                         throw std::runtime_error("Owners have different pools");
+                    // 09-06 a1ea3f4d2d 摘取窗同步放宽: adventure 多敌课程 (T06 1v3 → 1v7) 双方英雄数
+                    // 天然不等 — 大小差异降级为警告 (pool 名不同仍 throw, 真配错图仍可发现)
                     if (pool1.heroes.size() != player1.at(name1).heroes.size())
-                        throw std::runtime_error("Owners have differently sized pools");
+                        std::cout << "pool size mismatch owner0=" << pool1.heroes.size()
+                                  << " owner1=" << player1.at(name1).heroes.size()
+                                  << " (adventure multi-enemy course, skip)\n";
                 }
             }
         } else {
@@ -1075,13 +1080,7 @@ void ServerPlugin::endBattleHook(
         std::cout << "Hit battle limit of " << config.maxBattles << ", will quit now...\n";
         if (stats && config.statsPersistFreq) stats->dbupdate();
 
-        #ifdef VCMI_APPLE
-            ::exit(EXIT_SUCCESS);
-        #else
-            std::quick_exit(EXIT_SUCCESS);
-        #endif
-
-        ::exit(EXIT_SUCCESS);
+        std::exit(EXIT_SUCCESS);
         return;
     }
 }

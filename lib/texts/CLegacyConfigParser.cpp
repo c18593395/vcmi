@@ -10,6 +10,7 @@
 #include "StdInc.h"
 #include "CLegacyConfigParser.h"
 
+#include "ExceptionsCommon.h"
 #include "TextOperations.h"
 #include "Languages.h"
 
@@ -32,6 +33,9 @@ protected:
 CLegacyConfigParser::CLegacyConfigParser(const TextPath & resource)
 {
 	auto input = CResourceHandler::get()->load(resource);
+	if (!input)
+		throw DataLoadingException("Resource " + resource.getName() + " not found. Check data symlink or VCMI filesystem configuration.");
+
 	fileEncoding = LIBRARY->modh->findResourceEncoding(resource);
 
 	data.reset(new char[input->getSize()]);
@@ -128,7 +132,10 @@ float CLegacyConfigParser::readNumber()
 	std::istringstream stream(input);
 
 	if(input.find(',') != std::string::npos) // code to handle conversion with comma as decimal separator
-		stream.imbue(std::locale(std::locale(), new LocaleWithComma()));
+	{
+		static const std::locale commaLocale(std::locale(), new LocaleWithComma());
+		stream.imbue(commaLocale);
+	}
 
 	float result;
 	if ( !(stream >> result) )

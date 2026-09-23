@@ -20,6 +20,7 @@ class CGHeroInstance;
 class CGObjectInstance;
 class CGDwelling;
 class IMarket;
+class MetaString;
 
 VCMI_LIB_NAMESPACE_END
 
@@ -97,6 +98,7 @@ class CRecruitmentWindow : public CStatusbarWindow
 	void select(std::shared_ptr<CCreatureCard> card);
 	void buy();
 	void sliderMoved(int to);
+	static ImagePath getRecruitmentBackground(const CGDwelling * dwelling, int level);
 
 	void showAll(Canvas & to) override;
 public:
@@ -162,11 +164,17 @@ class CLevelWindow : public CWindowObject
 
 	void selectionChanged(unsigned to);
 	void createSkillBox();
+	void submitSelection();
 
 public:
 	CLevelWindow(const CGHeroInstance *hero, PrimarySkill pskill, std::vector<SecondarySkill> &skills, std::function<void(ui32)> callback);
+	void setCloseOnSelection(bool value);
 
 	void close() override;
+
+private:
+	bool closeOnSelection = true;
+	bool selectionSubmitted = false;
 };
 
 /// Town portal, castle gate window
@@ -388,7 +396,11 @@ class CUniversityWindow final : public CStatusbarWindow, public IMarketHolder
 	std::function<void()> onWindowClosed;
 
 public:
+	static ImagePath getUniversityBackground(size_t skillCount);
+	static ImagePath getUniversityConfirmBackground(int costElements);
+	static int getUniversityItemPosX(size_t itemIndex, size_t skillCount, int windowWidth);
 	CUniversityWindow(const CGHeroInstance * _hero, BuildingID building, const IMarket * _market, const std::function<void()> & onWindowClosed);
+	const CGHeroInstance * getHero() const;
 
 	void makeDeal(SecondarySkill skill);
 	void close() override;
@@ -419,7 +431,7 @@ public:
 };
 
 /// Garrison window where you can take creatures out of the hero to place it on the garrison
-class CGarrisonWindow : public CWindowObject, public IGarrisonHolder
+class CGarrisonWindow : public CStatusbarWindow, public IGarrisonHolder
 {
 	std::shared_ptr<CLabel> title;
 	std::shared_ptr<CAnimImage> banner;
@@ -430,7 +442,7 @@ class CGarrisonWindow : public CWindowObject, public IGarrisonHolder
 public:
 	std::shared_ptr<CButton> quit;
 
-	CGarrisonWindow(const CArmedInstance * up, const CGHeroInstance * down, bool removableUnits);
+	CGarrisonWindow(const CArmedInstance * up, const CGHeroInstance * down, bool removableUnits, const MetaString & customTitle);
 
 	void updateGarrisons() override;
 	bool holdsGarrison(const CArmedInstance * army) override;

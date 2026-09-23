@@ -66,7 +66,7 @@ void TavernHeroesPool::setHeroForPlayer(PlayerColor player, TavernHeroSlot slot,
 
 	if (replenishPoints)
 	{
-		h->setMovementPoints(h->movementPointsLimit(true));
+		h->setMovementPoints(h->movementPointsLimit());
 		h->mana = h->manaLimit();
 	}
 
@@ -78,7 +78,7 @@ void TavernHeroesPool::setHeroForPlayer(PlayerColor player, TavernHeroSlot slot,
 
 	currentTavern.push_back(newSlot);
 
-	boost::range::sort(currentTavern, [](const TavernSlot & left, const TavernSlot & right)
+	std::ranges::sort(currentTavern, [](const TavernSlot & left, const TavernSlot & right)
 	{
 		if (left.slot == right.slot)
 			return left.player < right.player;
@@ -137,7 +137,7 @@ void TavernHeroesPool::onNewDay()
 		if (vstd::contains(unusedHeroes, heroID))
 			continue;
 
-		heroPtr->setMovementPoints(heroPtr->movementPointsLimit(true));
+		heroPtr->setMovementPoints(heroPtr->movementPointsLimit());
 		heroPtr->mana = heroPtr->getManaNewTurn();
 	}
 }

@@ -92,7 +92,7 @@ int3 IBoatGenerator::bestLocation() const
 		if(!tile)
 			continue; // tile not visible / outside the map
 
-		if(!tile->isWater())
+		if(getBoatLayer() == EPathfindingLayer::SAIL && !tile->isWater())
 			continue;
 
 		if (tile->blocked())

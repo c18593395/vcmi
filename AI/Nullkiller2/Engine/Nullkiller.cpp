@@ -20,6 +20,7 @@
 #include "../Behaviors/CaptureObjectsBehavior.h"
 #include "../Behaviors/ClusterBehavior.h"
 #include "../Behaviors/DefenceBehavior.h"
+#include "../Behaviors/EscapeBehavior.h"
 #include "../Behaviors/ExplorationBehavior.h"
 #include "../Behaviors/GatherArmyBehavior.h"
 #include "../Behaviors/RecruitHeroBehavior.h"
@@ -27,7 +28,6 @@
 #include "../Goals/Invalid.h"
 #include "Goals/RecruitHero.h"
 #include "ResourceTrader.h"
-#include <boost/range/algorithm/sort.hpp>
 
 namespace NK2AI
 {
@@ -66,6 +66,14 @@ bool canUseOpenMap(const std::shared_ptr<CCallback>& cb, const PlayerColor playe
 	);
 
 	return !hasHumanInTeam;
+}
+
+std::vector<HitMapInfo> getTownThreatsForDefenderReservation(const CGTownInstance * town, const Nullkiller * aiNk)
+{
+	std::vector<HitMapInfo> threats = aiNk->dangerHitMap->getTownThreats(town);
+	threats.push_back(aiNk->dangerHitMap->getObjectThreat(town).fastestDanger);
+
+	return threats;
 }
 
 void Nullkiller::init(const std::shared_ptr<CCallback> & cbInput, AIGateway * aiGwInput)
@@ -164,6 +172,20 @@ void TaskPlan::mergeAndFilter(const TSubgoal & task)
 	tasks.emplace_back(task);
 }
 
+TaskFailureAction chooseTaskFailureAction(bool hasAnySuccess, bool hasRemainingTasks, bool canReplan)
+{
+	if(hasAnySuccess)
+		return TaskFailureAction::REPLAN;
+
+	if(hasRemainingTasks)
+		return TaskFailureAction::TRY_NEXT_TASK;
+
+	if(canReplan)
+		return TaskFailureAction::REPLAN;
+
+	return TaskFailureAction::STOP_TURN;
+}
+
 Goals::TTask Nullkiller::choseBestTask(Goals::TGoalVec & tasks) const
 {
 	if(tasks.empty())
@@ -185,25 +207,52 @@ Goals::TTask Nullkiller::choseBestTask(Goals::TGoalVec & tasks) const
 	return taskptr(*bestTask);
 }
 
-Goals::TTaskVec Nullkiller::buildPlanAndFilter(TGoalVec & tasks, int priorityTier) const
+Nullkiller::EvaluationContextMap Nullkiller::buildEvaluationContexts(const TGoalVec & tasks) const
+{
+	std::vector<std::optional<EvaluationContext>> contexts(tasks.size());
+
+	tbb::parallel_for(
+		tbb::blocked_range<size_t>(0, tasks.size(), 128),
+		[this, &tasks, &contexts](const tbb::blocked_range<size_t> & r)
+		{
+			const auto evaluator = priorityEvaluators->acquire();
+			for(size_t i = r.begin(); i != r.end(); ++i)
+				contexts[i].emplace(evaluator->buildEvaluationContext(tasks[i]));
+		}
+	);
+
+	EvaluationContextMap result;
+	for(size_t i = 0; i != tasks.size(); ++i)
+		result.try_emplace(tasks[i].get(), std::move(contexts[i].value()));
+
+	return result;
+}
+
+Goals::TTaskVec Nullkiller::buildPlanAndFilter(
+	TGoalVec & tasks,
+	const EvaluationContextMap & evaluationContexts,
+	int priorityTier) const
 {
 	TaskPlan taskPlan;
 
 	tbb::parallel_for(
-		tbb::blocked_range<size_t>(0, tasks.size()),
-		[this, &tasks, priorityTier](const tbb::blocked_range<size_t> & r)
+		tbb::blocked_range<size_t>(0, tasks.size(), 128),
+		[this, &tasks, &evaluationContexts, priorityTier](const tbb::blocked_range<size_t> & r)
 		{
 			const auto evaluator = this->priorityEvaluators->acquire();
 			for(size_t i = r.begin(); i != r.end(); i++)
 			{
 				const auto & task = tasks[i];
 				if(task->asTask()->priority <= 0 || priorityTier != PriorityEvaluator::PriorityTier::BUILDINGS)
-					task->asTask()->priority = evaluator->evaluate(task, priorityTier);
+					task->asTask()->priority = evaluator->evaluate(
+						task,
+						priorityTier,
+						evaluationContexts.at(task.get()));
 			}
 		}
 	);
 
-	boost::range::sort(
+	std::ranges::sort(
 		tasks,
 		[](const TSubgoal & g1, const TSubgoal & g2) -> bool
 		{
@@ -346,9 +395,84 @@ void Nullkiller::updateState()
 	}
 }
 
+const CGHeroInstance * Nullkiller::findRequiredTownDefender(const CGTownInstance * town) const
+{
+	const auto threats = getTownThreatsForDefenderReservation(town, this);
+	const auto safeAttackRatio = settings->getSafeAttackRatio();
+	const CGHeroInstance * result = nullptr;
+	int bestCoveredThreats = 0;
+	uint64_t bestStrength = 0;
+
+	const auto evaluateHero = [&](const CGHeroInstance * hero)
+	{
+		if(!hero)
+			return;
+
+		const int coveredThreats = Goals::countTownThreatsCoveredByDefender(*town, *hero, threats, safeAttackRatio);
+		const bool reserveDefender = Goals::shouldReserveTownDefender(*town, *hero, threats, safeAttackRatio);
+		const uint64_t strength = hero->getTotalStrength();
+
+		if(!reserveDefender)
+			return;
+
+		if(coveredThreats > bestCoveredThreats || (coveredThreats == bestCoveredThreats && strength > bestStrength))
+		{
+			result = hero;
+			bestCoveredThreats = coveredThreats;
+			bestStrength = strength;
+		}
+	};
+
+	evaluateHero(town->getGarrisonHero());
+	evaluateHero(town->getVisitingHero());
+
+	return result;
+}
+
+void Nullkiller::reserveRequiredTownDefenders()
+{
+	for(const auto * town : cc->getTownsInfo())
+	{
+		const auto * defender = findRequiredTownDefender(town);
+
+		if(!defender || getHeroLockedReason(defender) != HeroLockedReason::NOT_LOCKED)
+			continue;
+
+		logAi->debug("Reserving %s as defender of %s", defender->getNameTranslated(), town->getNameTranslated());
+		lockedHeroes[defender] = HeroLockedReason::DEFENCE;
+	}
+
+	for(const auto * town : cc->getTownsInfo())
+	{
+		const auto * garrisonHero = town->getGarrisonHero();
+
+		if(!garrisonHero || getHeroLockedReason(garrisonHero) != HeroLockedReason::NOT_LOCKED)
+			continue;
+
+		logAi->debug("Keeping %s in garrison of %s", garrisonHero->getNameTranslated(), town->getNameTranslated());
+		lockedHeroes[garrisonHero] = HeroLockedReason::DEFENCE;
+	}
+}
+
 bool Nullkiller::isHeroLocked(const CGHeroInstance * hero) const
 {
 	return getHeroLockedReason(hero) != HeroLockedReason::NOT_LOCKED;
+}
+
+void Nullkiller::lockHero(const CGHeroInstance * hero, HeroLockedReason lockReason)
+{
+	if(!hero)
+		return;
+
+	lockedHeroes[hero] = lockReason;
+}
+
+void Nullkiller::unlockHero(const CGHeroInstance * hero)
+{
+	if(!hero)
+		return;
+
+	lockedHeroes.erase(hero);
 }
 
 bool Nullkiller::arePathHeroesLocked(const AIPath & path) const
@@ -385,7 +509,6 @@ HeroLockedReason Nullkiller::getHeroLockedReason(const CGHeroInstance * hero) co
 
 void Nullkiller::makeTurn()
 {
-	std::lock_guard<std::mutex> sharedStorageLock(AISharedStorage::locker);
 	pathfinderTurnStorageMisses.store(0);
 	const int MAX_DEPTH = 10;
 	resetState();
@@ -403,22 +526,26 @@ void Nullkiller::makeTurn()
 		if (!updateStateAndExecutePriorityPass(tasks, pass))
 			return;
 
+		reserveRequiredTownDefenders();
+
 		tasks.clear();
 		decompose(tasks, sptr(CaptureObjectsBehavior()), 1);
 		decompose(tasks, sptr(ClusterBehavior()), MAX_DEPTH);
 		decompose(tasks, sptr(DefenceBehavior()), MAX_DEPTH);
+		decompose(tasks, sptr(EscapeBehavior()), 1);
 		decompose(tasks, sptr(GatherArmyBehavior()), MAX_DEPTH);
 		// decompose(tasks, sptr(StayAtTownBehavior()), MAX_DEPTH);
 
 		if(!isOpenMap())
 			decompose(tasks, sptr(ExplorationBehavior()), MAX_DEPTH);
 
+		const auto evaluationContexts = buildEvaluationContexts(tasks);
 		TTaskVec selectedTasks;
 		int prioOfTask = 0;
 		for(int prio = PriorityEvaluator::PriorityTier::INSTAKILL; prio <= PriorityEvaluator::PriorityTier::MAX_PRIORITY_TIER; ++prio)
 		{
 			prioOfTask = prio;
-			selectedTasks = buildPlanAndFilter(tasks, prio);
+			selectedTasks = buildPlanAndFilter(tasks, evaluationContexts, prio);
 			if (!selectedTasks.empty())
 			{
 				// Activate for deep debugging, otherwise too noisy even for trace level 2
@@ -436,7 +563,7 @@ void Nullkiller::makeTurn()
 			}
 		}
 
-		boost::range::sort(selectedTasks, [](const TTask& a, const TTask& b)
+		std::ranges::sort(selectedTasks, [](const TTask& a, const TTask& b)
 		{
 			return a->priority > b->priority;
 		});
@@ -447,8 +574,10 @@ void Nullkiller::makeTurn()
 		}
 
 		bool hasAnySuccess = false;
-		for(const auto& selectedTask : selectedTasks)
+		for(size_t selectedTaskIndex = 0; selectedTaskIndex < selectedTasks.size(); ++selectedTaskIndex)
 		{
+			const auto & selectedTask = selectedTasks[selectedTaskIndex];
+
 			if(cc->getPlayerStatus(playerID) != EPlayerStatus::INGAME)
 				return;
 
@@ -514,8 +643,23 @@ void Nullkiller::makeTurn()
 			{
 				if(!executeTask(selectedTask))
 				{
-					if(hasAnySuccess)
+					lockTaskHeroes(selectedTask, HeroLockedReason::HERO_CHAIN);
+					const bool hasRemainingTasks = selectedTaskIndex + 1 < selectedTasks.size();
+					const auto failureAction = chooseTaskFailureAction(hasAnySuccess, hasRemainingTasks, hasUnlockedHeroWithMovement());
+
+					if(failureAction == TaskFailureAction::TRY_NEXT_TASK)
+					{
+						logAi->warn("Task failed to execute. Trying the next available task.");
+						continue;
+					}
+
+					if(failureAction == TaskFailureAction::REPLAN)
+					{
+						logAi->warn("Task failed to execute. Replanning.");
+						hasAnySuccess = true;
 						break;
+					}
+
 					return;
 				}
 				hasAnySuccess = true;
@@ -567,8 +711,8 @@ bool Nullkiller::updateStateAndExecutePriorityPass(Goals::TGoalVec & tempResults
 			}
 			else if(!executeTask(bestPrioPassTask))
 			{
-				logAi->warn("Task failed to execute");
-				return false;
+				logAi->warn("Task failed to execute during priority pass. Continuing with regular turn planning.");
+				break;
 			}
 
 			updateState();
@@ -610,7 +754,46 @@ HeroRole Nullkiller::getTaskRole(const Goals::TTask & task) const
 	return heroRole;
 }
 
-bool Nullkiller::executeTask(const Goals::TTask & task) const
+std::vector<const CGHeroInstance *> Nullkiller::getTaskHeroes(const Goals::TTask & task) const
+{
+	std::vector<const CGHeroInstance *> heroes;
+
+	if(const auto * hero = task->getHero())
+		heroes.push_back(hero);
+
+	for(const auto objectId : task->getAffectedObjects())
+	{
+		if(const auto * hero = cc->getHero(objectId))
+			heroes.push_back(hero);
+	}
+
+	vstd::removeDuplicates(heroes);
+
+	return heroes;
+}
+
+void Nullkiller::lockTaskHeroes(const Goals::TTask & task, HeroLockedReason lockReason)
+{
+	for(const auto * hero : getTaskHeroes(task))
+	{
+		if(hero->getOwner() == playerID)
+			lockHero(hero, lockReason);
+	}
+}
+
+bool Nullkiller::hasUnlockedHeroWithMovement() const
+{
+	return vstd::contains_if(
+		cc->getHeroesInfo(),
+		[this](const CGHeroInstance * hero) -> bool
+		{
+			return !hero->isGarrisoned()
+				&& !isHeroLocked(hero)
+				&& hero->movementPointsRemaining() > 100;
+		});
+}
+
+bool Nullkiller::executeTask(const Goals::TTask & task)
 {
 	auto start = std::chrono::high_resolution_clock::now();
 	std::string taskDescr = task->toString();
@@ -629,7 +812,8 @@ bool Nullkiller::executeTask(const Goals::TTask & task) const
 	}
 	catch(cannotFulfillGoalException & e)
 	{
-		logAi->error("Failed to realize subgoal of type %s, I will stop.", taskDescr);
+		invalidatePathfinderData();
+		logAi->error("Failed to realize subgoal of type %s.", taskDescr);
 		logAi->error("The error message was: %s", e.what());
 		return false;
 	}
@@ -678,9 +862,9 @@ void Nullkiller::tracePlayerStatus(bool beginning) const
 #endif
 }
 
-std::map<const CGHeroInstance *, HeroRole> Nullkiller::getHeroesForPathfinding() const
+HeroMap<HeroRole> Nullkiller::getHeroesForPathfinding() const
 {
-	std::map<const CGHeroInstance *, HeroRole> activeHeroes;
+	HeroMap<HeroRole> activeHeroes;
 	for(auto hero : cc->getHeroesInfo())
 	{
 		if(getHeroLockedReason(hero) == HeroLockedReason::DEFENCE)

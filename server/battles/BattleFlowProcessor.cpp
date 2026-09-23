@@ -24,9 +24,9 @@
 #include "../../lib/mapObjects/CGTownInstance.h"
 #include "../../lib/networkPacks/PacksForClientBattle.h"
 #include "../../lib/spells/BonusCaster.h"
-#include "../../lib/spells/CSpellHandler.h"
 #include "../../lib/spells/ISpellMechanics.h"
 #include "../../lib/spells/ObstacleCasterProxy.h"
+#include "../../lib/spells/CSpell.h"
 
 #include <vstd/RNG.h>
 
@@ -136,10 +136,47 @@ void BattleFlowProcessor::onBattleStarted(const CBattleInfoCallback & battle)
 {
 	tryPlaceMoats(battle);
 
+	tryLearnEnemySpellsPreBattle(battle, BattleSide::ATTACKER);
+	tryLearnEnemySpellsPreBattle(battle, BattleSide::DEFENDER);
+
 	gameHandler->turnTimerHandler->onBattleStart(battle.getBattle()->getBattleID());
 
 	if (battle.battleGetTacticDist() == 0)
 		onTacticsEnded(battle);
+}
+
+void BattleFlowProcessor::tryLearnEnemySpellsPreBattle(const CBattleInfoCallback & battle, BattleSide side)
+{
+	const auto * learner = battle.battleGetFightingHero(side);
+	const auto * enemy = battle.battleGetFightingHero(battle.otherSide(side));
+
+	if(!learner || !enemy || !learner->hasSpellbook())
+		return;
+
+	const auto eagleEyeLevel = learner->valOfBonuses(BonusType::LEARN_BATTLE_SPELL_LEVEL_LIMIT_PRE_BATTLE);
+	if(eagleEyeLevel <= 0)
+		return;
+
+	const auto eagleEyeChance = learner->valOfBonuses(BonusType::LEARN_BATTLE_SPELL_CHANCE_PRE_BATTLE);
+	if(eagleEyeChance <= 0)
+		return;
+
+	ChangeSpells learnedSpells;
+	learnedSpells.learn = true;
+	learnedSpells.hid = learner->id;
+
+	for(const auto spellID : enemy->getSpellsInSpellbook())
+	{
+		const auto * spell = spellID.toSpell();
+		if(!spell)
+			continue;
+
+		if(spell->getLevel() <= eagleEyeLevel && !learner->spellbookContainsSpell(spell->getId()) && gameHandler->getRandomGenerator().nextInt(99) < eagleEyeChance)
+			learnedSpells.spells.insert(spell->getId());
+	}
+
+	if(!learnedSpells.spells.empty())
+		gameHandler->sendAndApply(learnedSpells);
 }
 
 void BattleFlowProcessor::trySummonGuardians(const CBattleInfoCallback & battle, const CStack * stack)
@@ -629,13 +666,31 @@ bool BattleFlowProcessor::tryMakeAutomaticActionOfMeleeUnit(const CBattleInfoCal
 		bool isMachine = possibleTarget->unitType()->warMachine != ArtifactID::NONE;
 		bool isParalyzed = possibleTarget->hasBonusOfType(BonusType::NOT_ACTIVE) && !isMachine;
 
-		BattleHexArray attackableHexes = possibleTarget->getAttackableHexes(actingStack);
-		BattleHex closestTargetAdjacentHex = boost::min_element(attackableHexes, [&reachabilityCache](const BattleHex & lhs, const BattleHex & rhs)
+		BattleHexArray attackableHexes;
+		const auto availableHexes = battle.battleGetAvailableHexes(reachabilityCache, actingStack, true);
+
+		for(const BattleHex & targetHex : possibleTarget->getHexes())
+		{
+			for(int direction = 0; direction < 8; ++direction)
+			{
+				auto directionEnum = static_cast<BattleHex::EDir>(direction);
+				if(!battle.battleCanAttackHex(availableHexes, actingStack, targetHex, directionEnum))
+					continue;
+
+				BattleHex attackFromHex = battle.fromWhichHexAttack(actingStack, targetHex, directionEnum);
+				if(availableHexes.contains(attackFromHex))
+					attackableHexes.insert(attackFromHex);
+			}
+		}
+
+		bool isReachable = !attackableHexes.empty();
+		if(!isReachable)
+			continue;
+
+		BattleHex closestTargetAdjacentHex = std::ranges::min_element(attackableHexes, [&reachabilityCache](const BattleHex & lhs, const BattleHex & rhs)
 		{
 			return reachabilityCache.distances[lhs.toInt()] < reachabilityCache.distances[rhs.toInt()];
 		})[0];
-
-		bool isReachable = battle.battleGetAvailableHexes(reachabilityCache, actingStack, true).contains(closestTargetAdjacentHex);
 
 		TargetInfo currentTarget =
 		{
@@ -685,7 +740,7 @@ bool BattleFlowProcessor::tryMakeAutomaticActionOfMeleeUnit(const CBattleInfoCal
 bool BattleFlowProcessor::tryMakeAutomaticActionOfCatapult(const CBattleInfoCallback & battle, const CStack * next)
 {
 	const CGHeroInstance * curOwner = battle.battleGetOwnerHero(next);
-	if (next->unitType()->getId() == CreatureID::CATAPULT)
+	if (next->isCatapult())
 	{
 		const auto & attackableBattleHexes = battle.getAttackableWallParts();
 
@@ -712,7 +767,7 @@ bool BattleFlowProcessor::tryMakeAutomaticActionOfCatapult(const CBattleInfoCall
 bool BattleFlowProcessor::tryMakeAutomaticActionOfFirstAidTent(const CBattleInfoCallback & battle, const CStack * next)
 {
 	const CGHeroInstance * curOwner = battle.battleGetOwnerHero(next);
-	if (next->unitType()->getId() == CreatureID::FIRST_AID_TENT)
+	if (next->isFirstAidTent())
 	{
 		TStacks possibleStacks = battle.battleGetStacksIf([&next](const CStack * s)
 		{

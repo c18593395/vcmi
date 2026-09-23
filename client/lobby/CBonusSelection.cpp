@@ -54,12 +54,12 @@
 #include "../../lib/entities/faction/CTown.h"
 #include "../../lib/entities/faction/CTownHandler.h"
 #include "../../lib/entities/hero/CHeroHandler.h"
-#include "../../lib/spells/CSpellHandler.h"
 #include "../../lib/filesystem/Filesystem.h"
 #include "../../lib/mapObjects/CGHeroInstance.h"
 #include "../../lib/mapping/CMapHeader.h"
 #include "../../lib/mapping/CMapInfo.h"
 #include "../../lib/mapping/CMapService.h"
+#include "../../lib/spells/CSpell.h"
 #include "../../lib/texts/CGeneralTextHandler.h"
 #include "../../lib/texts/TextOperations.h"
 #include "mapping/MapFormatSettings.h"
@@ -94,7 +94,8 @@ CBonusSelection::CBonusSelection()
 
 	campaignName = std::make_shared<CLabel>(481, 28, FONT_BIG, ETextAlignment::TOPLEFT, Colors::YELLOW, GAME->server().si->getCampaignName(), 250);
 
-	iconsMapSizes = std::make_shared<CAnimImage>(AnimationPath::builtin("SCNRMPSZ"), 4, 0, 735, 26);
+	iconsMapSizes = std::make_shared<CAnimImage>(AnimationPath::builtin("SCNRMPSZ"), 0, 0, 735, 26);
+	iconsMapSizes->setFrame(iconsMapSizes->size() - 1); // use last available frame as "custom" icon
 
 	labelCampaignDescription = std::make_shared<CLabel>(481, 63, FONT_SMALL, ETextAlignment::TOPLEFT, Colors::YELLOW, LIBRARY->generaltexth->allTexts[38]);
 	campaignDescription = std::make_shared<CTextBox>(getCampaign()->getDescriptionTranslated(), Rect(480, 86, 286, 117), 1);
@@ -152,14 +153,19 @@ CBonusSelection::CBonusSelection()
 		buttonExtraOptions = std::make_shared<CButton>(Point(643, 431), AnimationPath::builtin("GSPBUT2.DEF"), LIBRARY->generaltexth->zelp[46], [this]{ tabExtraOptions->setEnabled(!tabExtraOptions->isActive()); ENGINE->windows().totalRedraw(); }, EShortcut::LOBBY_EXTRA_OPTIONS);
 		buttonExtraOptions->setTextOverlay(LIBRARY->generaltexth->translate("vcmi.optionsTab.extraOptions.hover"), FONT_SMALL, Colors::WHITE);
 	}
+
+	// Ensure campaign map info is synchronized even if player doesn't click any region manually.
+	GAME->server().setCampaignMap(GAME->server().campaignMap);
 }
 
 void CBonusSelection::createBonusesIcons()
 {
 	OBJECT_CONSTRUCTION;
+	groupBonusesLabels.clear();
 	const CampaignScenario & scenario = getCampaign()->scenario(GAME->server().campaignMap);
 	const std::vector<CampaignBonus> & bonDescs = scenario.travelOptions.bonusesToChoose;
 	groupBonuses = std::make_shared<CToggleGroup>(std::bind(&IServerAPI::setCampaignBonus, &GAME->server(), _1));
+	groupBonuses->setRedrawParent(true);
 
 	auto getBuildingID = [this](const CampaignBonusBuilding & bonusValue) -> std::pair<FactionID, BuildingID> {
 		FactionID faction;
@@ -311,7 +317,7 @@ void CBonusSelection::createBonusesIcons()
 				desc.replaceTextID(TextIdentifier("core", "skilllev", bonusValue.mastery - 1).get());
 				desc.replaceName(bonusValue.skill);
 				if (!skill->at(bonusValue.mastery).scenarioBonus.empty())
-					picName = skill->at(bonusValue.mastery).scenarioBonus.empty();
+					picName = skill->at(bonusValue.mastery).scenarioBonus;
 				else
 					picNumber = bonusValue.skill.getNum() * 3 + bonusValue.mastery - 1;
 				break;
@@ -392,6 +398,7 @@ void CBonusSelection::createBonusesIcons()
 			if(buttonStart->isActive() && !buttonStart->isBlocked())	
 				CBonusSelection::startMap();
 		});
+		bonusButton->setRedrawParent(true);
 
 		if(picNumber != -1)
 			bonusButton->setOverlay(std::make_shared<CAnimImage>(AnimationPath::builtin(picName), picNumber));
@@ -562,7 +569,7 @@ void CBonusSelection::updateAfterStateChange()
 
 	if(!GAME->server().mi)
 		return;
-	iconsMapSizes->setFrame(GAME->server().mi->getMapSizeIconId());
+	iconsMapSizes->setFrame(std::min<size_t>(GAME->server().mi->getMapSizeIconId(), iconsMapSizes->size() - 1));
 	mapName->setText(GAME->server().mi->getNameTranslated());
 	mapDescription->setText(GAME->server().mi->getDescriptionTranslated());
 	for(size_t i = 0; i < difficultyIcons.size(); i++)

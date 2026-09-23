@@ -21,6 +21,12 @@
 #include "GeometryAlgorithm.h"
 
 #include "../helper.h"
+#include "../editorfiledialog.h"
+
+#ifdef VCMI_ANDROID
+#include <QAndroidJniObject>
+#include <QtAndroid>
+#endif
 
 #include "../../lib/VCMIDirs.h"
 #include "../../lib/rmg/CRmgTemplate.h"
@@ -30,7 +36,11 @@ TemplateEditor::TemplateEditor():
 	ui(new Ui::TemplateEditor)
 {
 	ui->setupUi(this);
-	
+
+#ifdef VCMI_MOBILE
+	ui->menubar->setNativeMenuBar(false);
+#endif
+
 	setWindowIcon(QIcon{":/icons/menu-game.png"});
 	ui->actionOpen->setIcon(QIcon{":/icons/document-open.png"});
 	ui->actionSave->setIcon(QIcon{":/icons/document-save.png"});
@@ -401,7 +411,7 @@ void TemplateEditor::loadZoneMenuContent(bool onlyPosition)
 			ui->comboBoxZoneOwner->addItem(QString::fromStdString(str.toString()), QVariant(static_cast<int>(color + 1)));
 		}
 		for (int i = 0; i < ui->comboBoxZoneOwner->count(); ++i)
-			if (ui->comboBoxZoneOwner->itemData(i).toInt() == static_cast<int>(*zone->getOwner() + 1))
+			if (ui->comboBoxZoneOwner->itemData(i).toInt() == static_cast<int>(*zone->getOwner()))
 				ui->comboBoxZoneOwner->setCurrentIndex(i);
 	}
 	else
@@ -648,7 +658,7 @@ bool TemplateEditor::getAnswerAboutUnsavedChanges()
 void TemplateEditor::setTitle()
 {
 	QFileInfo fileInfo(filename);
-	QString title = QString("%1%2 - %3 (%4)").arg(fileInfo.fileName(), unsaved ? "*" : "", tr("VCMI Template Editor"), GameConstants::VCMI_VERSION.c_str());
+	QString title = QString("%1%2 - %3 (%4)").arg(fileInfo.fileName(), unsaved ? "*" : "", tr("VCMI Template Editor"), GameConstants::VCMI_VERSION);
 	setWindowTitle(title);
 }
 
@@ -758,6 +768,7 @@ void TemplateEditor::showTemplateEditor(QWidget *parent)
 	dialog->move(parent->geometry().center() - dialog->rect().center());
 
 	dialog->setAttribute(Qt::WA_DeleteOnClose);
+	connect(dialog, &QObject::destroyed, parent, &QWidget::show);
 }
 
 void TemplateEditor::on_actionOpen_triggered()
@@ -768,9 +779,11 @@ void TemplateEditor::on_actionOpen_triggered()
 	if(!getAnswerAboutUnsavedChanges())
 		return;
 	
-	auto filenameSelect = QFileDialog::getOpenFileName(this, tr("Open template"),
-		QString::fromStdString(VCMIDirs::get().userDataPath().make_preferred().string()),
-		tr("VCMI templates(*.json)"));
+	auto title = tr("Open template");
+	auto dir = QString::fromStdString(VCMIDirs::get().userDataPath().make_preferred().string());
+	auto filter = tr("VCMI templates(*.json)");
+
+	auto filenameSelect = EditorFileDialog::getOpenFileName(this, title, dir, filter, /*externalOnly=*/true);
 	if(filenameSelect.isEmpty())
 		return;
 
@@ -786,7 +799,12 @@ void TemplateEditor::on_actionSave_as_triggered()
 	if(!validate())
 		return;
 
-	auto filenameSelect = QFileDialog::getSaveFileName(this, tr("Save template"), "", tr("VCMI templates (*.json)"));
+	auto title = tr("Save template");
+	auto filter = tr("VCMI templates (*.json)");
+
+	QString contentUri;
+	auto filenameSelect = EditorFileDialog::getSaveFileName(this, title, QString(), filter,
+		contentUri, /*externalOnly=*/true);
 
 	if(filenameSelect.isNull())
 		return;
@@ -799,6 +817,8 @@ void TemplateEditor::on_actionSave_as_triggered()
 	filename = filenameSelect;
 	saveTemplate();
 	setTitle();
+
+	EditorFileDialog::writeFileToUri(filename, contentUri);
 }
 
 void TemplateEditor::on_actionNew_triggered()
@@ -894,9 +914,24 @@ void TemplateEditor::on_comboBoxTemplateSelection_activated(int index)
 void TemplateEditor::closeEvent(QCloseEvent *event)
 {
 	if(getAnswerAboutUnsavedChanges())
+	{
 		QWidget::closeEvent(event);
+#ifdef VCMI_ANDROID
+		QApplication::quit();
+		QAndroidJniObject activity = QtAndroid::androidActivity();
+		if(activity.isValid())
+			activity.callMethod<void>("finishAffinity");
+#endif
+	}
 	else
 		event->ignore();
+}
+
+void TemplateEditor::changeEvent(QEvent *event)
+{
+	QWidget::changeEvent(event);
+	if(event->type() == QEvent::LanguageChange)
+		ui->retranslateUi(this);
 }
 
 void TemplateEditor::on_pushButtonAddSubTemplate_clicked()
@@ -1265,4 +1300,9 @@ void TemplateEditor::on_pushButtonEntitiesBannedHeroes_clicked()
 {
 	EntityIds entitiesVariant = std::ref(templates[selectedTemplate]->bannedHeroes);
 	EntitiesSelector::showEntitiesSelector(entitiesVariant);
+}
+
+void TemplateEditor::on_actionExit_triggered()
+{
+	close();
 }

@@ -30,7 +30,7 @@
 
 #include "../../lib/entities/ResourceTypeHandler.h"
 #include "../../lib/gameState/GameStatistics.h"
-#include "../../lib/gameState/CGameState.h"
+#include "../../lib/callback/Calendar.h"
 #include "../../lib/texts/CGeneralTextHandler.h"
 #include "../../lib/texts/TextOperations.h"
 #include "../../lib/GameLibrary.h"
@@ -40,7 +40,9 @@
 
 std::string CStatisticScreen::getDay(int d)
 {
-	return std::to_string(CGameState::getDate(d, Date::MONTH)) + "/" + std::to_string(CGameState::getDate(d, Date::WEEK)) + "/" + std::to_string(CGameState::getDate(d, Date::DAY_OF_WEEK));
+	// TODO - find way to provide settings used by game, not global ones - since map might have used different week/month length
+	Calendar calendar(*LIBRARY->engineSettings(), d);
+	return std::to_string(calendar.getMonth()) + "/" + std::to_string(calendar.getWeek()) + "/" + std::to_string(calendar.getDayOfWeek());
 }
 
 CStatisticScreen::CStatisticScreen(const StatisticDataSet & stat)
@@ -56,10 +58,10 @@ CStatisticScreen::CStatisticScreen(const StatisticDataSet & stat)
 	layout.emplace_back(std::make_shared<TransparentFilledRectangle>(contentArea, ColorRGBA(0, 0, 0, 128), ColorRGBA(64, 80, 128, 255), 1));
 	layout.emplace_back(std::make_shared<CButton>(Point(725, 558), AnimationPath::builtin("MUBCHCK"), CButton::tooltip(), [this](){ close(); }, EShortcut::GLOBAL_ACCEPT));
 
-	buttonSelect = std::make_shared<CToggleButton>(Point(10, 564), AnimationPath::builtin("GSPBUT2"), CButton::tooltip(), [this](bool on){ onSelectButton(); });
+	buttonSelect = std::make_shared<CButton>(Point(10, 564), AnimationPath::builtin("GSPBUT2"), CButton::tooltip(), [this](){ onSelectButton(); });
 	buttonSelect->setTextOverlay(LIBRARY->generaltexth->translate("vcmi.statisticWindow.selectView"), EFonts::FONT_SMALL, Colors::YELLOW);
 
-	buttonCsvSave = std::make_shared<CToggleButton>(Point(150, 564), AnimationPath::builtin("GSPBUT2"), CButton::tooltip(), [this](bool on){ ENGINE->input().copyToClipBoard(statistic.toCsv("\t"));	});
+	buttonCsvSave = std::make_shared<CButton>(Point(150, 564), AnimationPath::builtin("GSPBUT2"), CButton::tooltip(), [this](){ ENGINE->input().copyToClipBoard(statistic.toCsv("\t")); });
 	buttonCsvSave->setTextOverlay(LIBRARY->generaltexth->translate("vcmi.statisticWindow.tsvCopy"), EFonts::FONT_SMALL, Colors::YELLOW);
 
 	mainContent = getContent(OVERVIEW, EGameResID::NONE);
@@ -245,7 +247,7 @@ void StatisticSelector::update(int to)
 		if(i>=texts.size())
 			continue;
 
-		auto button = std::make_shared<CToggleButton>(Point(0, 10 + (i - to) * 40), AnimationPath::builtin("GSPBUT2"), CButton::tooltip(), [this, i](bool on){ close(); cb(i); });
+		auto button = std::make_shared<CButton>(Point(0, 10 + (i - to) * 40), AnimationPath::builtin("GSPBUT2"), CButton::tooltip(), [this, i](){ close(); cb(i); });
 		button->setTextOverlay(texts[i], EFonts::FONT_SMALL, Colors::WHITE);
 		buttons.emplace_back(button);
 	}

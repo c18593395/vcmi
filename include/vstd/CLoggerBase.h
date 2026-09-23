@@ -198,6 +198,7 @@ extern DLL_LINKAGE vstd::CLoggerBase * logAi;
 extern DLL_LINKAGE vstd::CLoggerBase * logAnim;
 extern DLL_LINKAGE vstd::CLoggerBase * logMod;
 extern DLL_LINKAGE vstd::CLoggerBase * logRng;
+extern DLL_LINKAGE vstd::CLoggerBase * logScript;
 extern DLL_LINKAGE vstd::CLoggerBase * logStats;
 
 VCMI_LIB_NAMESPACE_END

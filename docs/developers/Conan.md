@@ -84,7 +84,7 @@ mkdir build
 cd build
 
 # configure Qt for building, also pass to the following command:
-# for Android: -shared -xplatform android-clang -android-sdk "$ANDROID_HOME" -android-ndk "$ANDROID_HOME/ndk/$ndkVersion" -android-ndk-platform android-$minSdkVersion -android-abis arm64-v8a
+# for Android: -shared -xplatform android-clang -android-sdk "$ANDROID_HOME" -android-ndk "$ANDROID_HOME/ndk/$ndkVersion" -android-ndk-platform android-$minSdkVersion -android-abis arm64-v8a. Also pass -android-ndk-host according to your desktop platform.
 # for iOS: -static -xplatform macx-ios-clang -no-framework
 "../$qtSrcDir/configure" -prefix "$qtInstallDir" -opensource -confirm-license -release -strip -appstore-compliant -make libs -no-compile-examples -no-dbus -system-zlib -no-openssl -opengl es2 -no-gif -no-ico -nomake examples -skip qt3d -skip qtactiveqt -skip qtandroidextras -skip qtcharts -skip qtconnectivity -skip qtdatavis3d -skip qtdeclarative -skip qtdoc -skip qtgamepad -skip qtgraphicaleffects -skip qtimageformats -skip qtlocation -skip qtlottie -skip qtmacextras -skip qtmultimedia -skip qtnetworkauth -skip qtpurchasing -skip qtquick3d -skip qtquickcontrols -skip qtquickcontrols2 -skip qtquicktimeline -skip qtremoteobjects -skip qtscript -skip qtscxml -skip qtsensors -skip qtserialbus -skip qtserialport -skip qtspeech -skip qtsvg -skip qttranslations -skip qtvirtualkeyboard -skip qtwayland -skip qtwebchannel -skip qtwebengine -skip qtwebglplugin -skip qtwebsockets -skip qtwebview -skip qtwinextras -skip qtx11extras -skip qtxmlpatterns
 
@@ -113,9 +113,9 @@ Conan needs to generate CMake toolchain file to make dependencies available to C
 
 Make sure that you've cloned VCMI repository with submodules! (or initialized them afterwards)
 
-In terminal `cd` to the VCMI source directory and run the following command (it's written in Bash syntax, for other shells like Cmd or Powershell use appropriate line continuation character instead of `\` or type everything on a single line). Also check subsections for additional requirements on consuming prebuilt binaries.
+In terminal `cd` to the VCMI source directory and run the following command (it's written in Bash syntax, use the appropriate line continuation character for your shell or type everything on a single line). Also check subsections for additional requirements on consuming prebuilt binaries.
 
-*Note*: if you're going to build for Windows MSVC, it's recommended to use Cmd shell. If you absolutely want to use Powershell, then append `-c tools.env.virtualenv:powershell=powershell.exe` to the below command.
+*Note*: if you're going to build for Windows MSVC, use an elevated Cmd shell.
 
 <pre>
 conan install . \
@@ -134,7 +134,7 @@ The highlighted parts can be adjusted:
 
   - if you want to consume our prebuilt binaries for Apple platforms (macOS / iOS), pass `--profile=dependencies/conan_profiles/base/apple-system`
   - if you want to consume our prebuilt binaries for Android, pass `--profile=dependencies/conan_profiles/base/android-system`
-  - if your intention is to make a Debug build, pass `-s "&:build_type=RelWithDebInfo"` for Windows MSVC and `-s "&:build_type=Debug"` for other platforms
+  - if your intention is to make a Debug build, pass `-s "&:build_type=Debug"` (using `RelWithDebInfo` instead of `Debug` is also possible)
   - if you're building on (or for) Windows ARM64, pass `-o "&:lua_lib=lua"`
   - if you're building on (or for) Windows < 10, pass `-o "&:target_pre_windows10=True"`
 
@@ -152,52 +152,47 @@ You must adjust the above `conan install` command by replacing ***dependencies/c
 
 ### Building dependencies from source
 
-This subsection describes platform specifics to build libraries from source properly. Commands that our CI uses to build the dependencies can also be used as a reference, you can find them in the [dependcies repository](https://github.com/vcmi/vcmi-dependencies/blob/main/.github/workflows/rebuildDependencies.yml).
+In most cases the only thing you need to do is to run the above `conan install` command with `--build=missing` instead of `--build=never`. For desktop systems you can also simply use your default Conan profile instead of ours.
 
-You can use our Conan profiles or create your own (e.g. with different options), the choice is yours.
+Also, when building for mobiles, it's better to pass the minimal required iOS deployment target / Android API level for your device where you intend to run self-built VCMI instead of relying on the setting from our profiles. The reason is that we try to cover as many devices as possible by setting low values for that, but if you have, say iOS device running 18.x or Android device running 12.x, you don't really need to build with support for iOS 12.0 or Android 5.0. Additionally, you won't need to use custom patches for some dependencies most likely. So, to achieve that, you'd pass on the command line (or place this value in your host profile):
 
-*Note:* our profiles may require building some dependencies separately (e.g. `onnxruntime` for MSVC v142) and/or have environment configured in a special way (e.g. install MSVC v142 toolset separately), the best is to refer to the CI pipeline commands linked above. It's highly recommended to get at least a basic understanding of how Conan works when building stuff from source. Don't hesitate to ask for support in our Discord channel or in GitHub issues!
+- for iOS: `-s os.version=18.0`
+- for Android (use <https://apilevels.com/> for reference): `-s os.api_level=31`
+
+Note that if you wish to build LuaJIT (needed for scripting support) for mobiles, you must build it separately first, see below for details. Not required if you decide to use the script described in the next paragraph. Scripting is optional right now though, you can build VCMI without it.
+
+But in case such approach doesn't fit you or you simply want to build everything just like our CI does, you'd need to execute just a single command. Please refer to [submodule's readme](../../dependencies/README.md) for details.
+
+Don't hesitate to ask for support in our Discord channel or in GitHub issues!
+
+Below some platform details are described.
 
 #### Building for macOS/iOS
-
-If you wish to build dependencies against system libraries (like our prebuilts do), follow [below instructions](#using-recipes-for-system-libraries) executing `conan create` for all directories.
 
 Building `onnx` for iOS < 13 or macOS < 10.15 requires a patch, see [here](https://github.com/vcmi/vcmi-dependencies/blob/main/conan_patches/onnx/patches).
 
 #### Building for Android
 
-It's highly recommended to use NDK recipe provided by Conan, otherwise build may fail. If you're using your own Conan profile, you can include our [NDK profile](https://github.com/vcmi/vcmi-dependencies/tree/main/conan_profiles/base/android-ndk) via an additional `--profile` parameter on the command line.
-
-Android has issues loading self-built shared zlib library because binary name is identical to the system one, so we enforce using the OS-provided library. To achieve that, follow [below instructions](#using-recipes-for-system-libraries), you only need `zlib` directory.
-
-Also, Android requires a few patches, but they are needed only for specific use cases, so you may evaluate whether you need them. The patches can be found in the [dependcies repository](https://github.com/vcmi/vcmi-dependencies/blob/main/conan_patches/).
-
-Note: `minizip` v1.3.2 will probably not compile, use 1.3.1 or apply [this patch](https://github.com/madler/zlib/pull/1188) to fix.
+Android requires a few patches, but they are needed only for specific use cases, so you may evaluate whether you need them. The patches can be found in the [dependencies submodule](../../dependencies/conan_patches/).
 
 ##### Qt patches
 
-1. [Safety measure for Xiaomi devices](https://github.com/vcmi/vcmi-dependencies/blob/main/conan_patches/qt/patches/xiaomi.diff). It's unclear whether it's really needed, but without it [I faced a crash once](https://bugreports.qt.io/browse/QTBUG-111960).
-2. [Fix running on Android 5.0-5.1](https://github.com/vcmi/vcmi-dependencies/blob/main/conan_patches/qt/patches/android-21-22.diff) (API level 21-22).
-3. Enable running on Android 4.4 (API level 19-20, 32-bit only, requires NDK r25c): [patch 1](https://github.com/vcmi/vcmi-dependencies/blob/1bfe97e7290ac9491eb0ec09cf5e6c33e1e36812/conan_patches/qt/patches/android-19-jar.diff), [patch 2](https://github.com/vcmi/vcmi-dependencies/blob/1bfe97e7290ac9491eb0ec09cf5e6c33e1e36812/conan_patches/qt/patches/android-19-java.diff).
+1. [Safety measure for Xiaomi devices](../../dependencies/conan_patches/qt/patches/xiaomi.diff). It's unclear whether it's really needed, but without it [I faced a crash once](https://bugreports.qt.io/browse/QTBUG-111960).
+2. [Fix running on Android 5.0-5.1](../../dependencies/conan_patches/qt/patches/android-21-22.diff) (API level 21-22).
+3. [legacy] Enable running on Android 4.4 (API level 19-20, 32-bit only, requires NDK r25c): [patch 1](https://github.com/vcmi/vcmi-dependencies/blob/1bfe97e7290ac9491eb0ec09cf5e6c33e1e36812/conan_patches/qt/patches/android-19-jar.diff), [patch 2](https://github.com/vcmi/vcmi-dependencies/blob/1bfe97e7290ac9491eb0ec09cf5e6c33e1e36812/conan_patches/qt/patches/android-19-java.diff).
 
 ##### Patches for other libraries
 
-- Flac requires patch to be able to build it for 32-bit targeting API Level < 24
-- Minizip requires patch to be able to build it for 32-bit targeting API Level < 21
+- Minizip requires patch to be able to build it for 32-bit targeting API Level < 24
+- [legacy] Flac requires patch to be able to build it for 32-bit targeting API Level < 21
 
-Also, to build Flac, Luajit and Opusfile for 32-bit targeting API Level < 24, a couple of C defines must be added to your Conan profile - see our [profile for ARM 32-bit](https://github.com/vcmi/vcmi-dependencies/blob/main/conan_profiles/android-32).
+Also, to build Flac, Luajit and Opusfile for 32-bit targeting API Level < 24, a couple of C defines must be added to your Conan profile - see our [profile for ARM 32-bit](../../dependencies/conan_profiles/android-32).
 
-#### Using recipes for system libraries
+#### Building LuaJIT for mobiles
 
-1. Clone/download <https://github.com/kambala-decapitator/conan-system-libs>
-2. Execute `conan create PACKAGE --user system`, where `PACKAGE` is a directory path in that repository. Do it for each library you need. (basically just read repo's readme)
+First, you must build separate libraries with `conan create` if you want to build LuaJIT for iOS or Android. Upstream Conan recipe doesn't support this yet (but there's a [pull request](https://github.com/conan-io/conan-center-index/pull/26577)), so you'll have to use [fork](https://github.com/kambala-decapitator/conan-center-index/tree/package/luajit) where it works. You must also pass `--core-conf core.sources.patch:extra_path=<patches path>` parameter where `<patches path>` is the path to the patches directory, ours is located at [dependencies/conan_patches](../../dependencies/conan_patches).
 
-#### Build it
-
-First, you must build separate libraries with `conan create` if:
-
-- you chose to use patches (ours listed above or your own) for a library. You must also pass `--core-conf core.sources.patch:extra_path=<patches path>` parameter where `<patches path>` is the path to the patches directory, ours is located at [dependencies/conan_patches](https://github.com/vcmi/vcmi-dependencies/tree/main/conan_patches).
-- you want to build LuaJIT for iOS or Android (they also require patches, see the above point). Upstream Conan recipe doesn't support this yet (but there's a [pull request](https://github.com/conan-io/conan-center-index/pull/26577)), so you'll have to use [fork](https://github.com/kambala-decapitator/conan-center-index/tree/package/luajit) where it works. *Note*: to build for 32-bit architecture (e.g. Android armv7) your OS must be able to run 32-bit executables, see [this issue](https://github.com/LuaJIT/LuaJIT/issues/664) for details (for example, macOS since 10.15 can't do that); on Linux amd64 you'll have to install `libc6-dev-i386` package.
+*Note*: to build for 32-bit architecture (e.g. Android armv7) your OS must be able to run 32-bit executables, see [this issue](https://github.com/LuaJIT/LuaJIT/issues/664) for details (for example, macOS since 10.15 can't do that); on Linux amd64 you'll have to install `libc6-dev-i386` package.
 
 After that you can execute `conan install` to build the rest of the dependencies.
 
@@ -219,10 +214,8 @@ conan install . ^
   --output-folder=conan-msvc ^
   --build=never ^
   --profile=dependencies\conan_profiles\msvc-x64 ^
-  -s "&:build_type=RelWithDebInfo"
+  -s "&:build_type=Debug"
 
-REM this is important!
-conan-msvc\conanrun.bat
 
 cmake -S . -B build ^
   --toolchain conan-msvc\conan_toolchain.cmake
