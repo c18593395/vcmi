@@ -70,16 +70,6 @@ const Services * CPlayerEnvironment::services() const
 	return LIBRARY;
 }
 
-vstd::CLoggerBase * CPlayerEnvironment::logger() const
-{
-	return logGlobal;
-}
-
-events::EventBus * CPlayerEnvironment::eventBus() const
-{
-	return cl->eventBus();//always get actual value
-}
-
 const CPlayerEnvironment::BattleCb * CPlayerEnvironment::battle(const BattleID & battleID) const
 {
 	return mainCallback->getBattle(battleID).get();
@@ -117,16 +107,6 @@ const CClient::GameCb * CClient::game() const
 	return gamestate.get();
 }
 
-vstd::CLoggerBase * CClient::logger() const
-{
-	return logGlobal;
-}
-
-events::EventBus * CClient::eventBus() const
-{
-	return clientEventBus.get();
-}
-
 void CClient::newGame(std::shared_ptr<CGameState> initializedGameState)
 {
 	GAME->server().th->update();
@@ -136,7 +116,6 @@ void CClient::newGame(std::shared_ptr<CGameState> initializedGameState)
 	logNetwork->trace("\tCreating gamestate: %i", GAME->server().th->getDiff());
 
 	initMapHandler();
-	reinitScripting();
 	initPlayerEnvironments();
 	initPlayerInterfaces();
 }
@@ -152,7 +131,6 @@ void CClient::loadGame(std::shared_ptr<CGameState> initializedGameState)
 	logNetwork->info("Game loaded, initialize interfaces.");
 
 	initMapHandler();
-	reinitScripting();
 	initPlayerEnvironments();
 	initPlayerInterfaces();
 }
@@ -213,11 +191,9 @@ void CClient::initMapHandler()
 	// TODO: CMapHandler initialization can probably go somewhere else
 	// It's can't be before initialization of interfaces
 	// During loading CPlayerInterface from serialized state it's depend on MH
-	if(!settings["session"]["headless"].Bool() || IS_ML)
-	{
-		GAME->setMapInstance(std::make_unique<CMapHandler>(&gameState().getMap()));
-		logNetwork->trace("Creating mapHandler: %d ms", GAME->server().th->getDiff());
-	}
+	// FIXED: headless also needs mapInstance — netpack visitors (TryMoveHero etc.) call GAME->map()
+	GAME->setMapInstance(std::make_unique<CMapHandler>(&gameState().getMap()));
+	logNetwork->trace("Creating mapHandler: %d ms", GAME->server().th->getDiff());
 }
 
 void CClient::initPlayerEnvironments()
@@ -333,7 +309,7 @@ void CClient::installNewPlayerInterface(std::shared_ptr<CGameInterface> gameInte
 {
 	playerint[color] = gameInterface;
 
-	logGlobal->trace("\tInitializing the interface for player %s", color.toString());
+	logGlobal->trace("	Initializing the interface for player %s", color.toString());
 	auto cb = std::make_shared<CCallback>(gamestate, color, this);
 	battleCallbacks[color] = cb;
 	gameInterface->initGameInterface(playerEnvironments.at(color), cb, aiCombatOptions);

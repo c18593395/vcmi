@@ -20,6 +20,7 @@
 #include "Discord.h"
 
 #include "globalLobby/GlobalLobbyClient.h"
+#include "globalLobby/GlobalLobbyRoomWindow.h"
 
 #include "gui/WindowHandler.h"
 

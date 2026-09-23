@@ -140,31 +140,20 @@ void QueriesProcessor::popIfTop(const CQuery & query)
 	}
 }
 
-std::vector<std::shared_ptr<const CQuery>> QueriesProcessor::allQueries() const
+QueriesProcessor::AllQueriesView QueriesProcessor::allQueries()
 {
-	std::vector<std::shared_ptr<const CQuery>> ret;
-	for(const auto & playerQueries : queries)
-		for(const auto & query : playerQueries.second)
-			ret.push_back(query);
-
-	return ret;
+	return AllQueriesView{ queries };
 }
 
-std::vector<QueryPtr> QueriesProcessor::allQueries()
+QueriesProcessor::AllQueriesViewConst QueriesProcessor::allQueries() const
 {
-	//TODO code duplication with const function :(
-	std::vector<QueryPtr> ret;
-	for(const auto & playerQueries : queries)
-		for(const auto & query : playerQueries.second)
-			ret.push_back(query);
-
-	return ret;
+	return AllQueriesViewConst{ queries };
 }
 
 QueryPtr QueriesProcessor::getQuery(QueryID queryID)
 {
 	for(auto & playerQueries : queries)
-		for(auto & query : playerQueries.second)
+		for(auto & query : playerQueries)
 			if(query->queryID == queryID)
 				return query;
 	return nullptr;

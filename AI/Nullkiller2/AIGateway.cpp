@@ -171,7 +171,7 @@ void AIGateway::gameOver(PlayerColor player, const EVictoryLossCheckResult & vic
 		if(victoryLossCheckResult.victory())
 		{
 			logAi->debug("AIGateway: Player %d (%s) won. I won! Incredible!", player, player.toString());
-			logAi->debug("Turn nr %d", cc->getDate());
+			logAi->debug("Turn nr %d", cc->getCalendar().getCurrentDay());
 		}
 		else
 		{
@@ -696,7 +696,7 @@ void AIGateway::showTeleportDialog(const CGHeroInstance * hero, TeleportChannelI
 	});
 }
 
-void AIGateway::showGarrisonDialog(const CArmedInstance * up, const CGHeroInstance * down, bool removableUnits, QueryID queryID)
+void AIGateway::showGarrisonDialog(const CArmedInstance * up, const CGHeroInstance * down, bool removableUnits, QueryID queryID, const MetaString & customTitle)
 {
 	LOG_TRACE_PARAMS(logAi, "removableUnits '%i', queryID '%i'", removableUnits % queryID);
 	std::string s1 = up->nodeName();
@@ -771,7 +771,7 @@ void AIGateway::makeTurn()
 {
 	try
 	{
-		auto day = cc->getDate(Date::DAY);
+		auto day = cc->getCalendar().getCurrentDay();
 		logAi->info("Player %d (%s) starting turn, day %d", playerID, playerID.toString(), day);
 
 		std::shared_lock gsLock(CGameState::mutex);
@@ -1667,7 +1667,7 @@ void AIGateway::invalidatePaths()
 
 void AIGateway::cheatMapReveal(const std::unique_ptr<Nullkiller> & nullkiller)
 {
-	if(nullkiller->cc->getDate(Date::DAY) == 1) // No need to execute every day, only the first time
+	if(nullkiller->cc->getCalendar().getCurrentDay() == 1) // No need to execute every day, only the first time
 	{
 		if(nullkiller->isOpenMap())
 		{
@@ -1710,7 +1710,7 @@ void AIGateway::memorizeVisitableObj(const CGObjectInstance * obj,
 
 void AIGateway::memorizeRevisitableObjs(const std::unique_ptr<AIMemory> & memory, const PlayerColor & playerID, const std::shared_ptr<CCallback> & cc)
 {
-	if(cc->getDate(Date::DAY_OF_WEEK) == 1)
+	if(cc->getCalendar().getDayOfWeek() == 1)
 	{
 		for(const ObjectInstanceID objId : memory->visitableObjs)
 		{

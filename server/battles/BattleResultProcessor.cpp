@@ -24,6 +24,7 @@
 #include "../../lib/IGameSettings.h"
 #include "../../lib/battle/SideInBattle.h"
 #include "../../lib/entities/artifact/ArtifactUtils.h"
+#include <algorithm>
 #include "../../lib/entities/artifact/CArtifact.h"
 #include "../../lib/entities/artifact/CArtifactFittingSet.h"
 #include "../../lib/gameState/CGameState.h"
@@ -268,7 +269,14 @@ void BattleResultProcessor::endBattle(const CBattleInfoCallback & battle)
 	battleQuery->result = std::make_optional(*battleResult);
 
 	//Check how many battle gameHandler->queries were created (number of players blocked by battle)
-	const int queriedPlayers = battleQuery ? boost::count(gameHandler->queries->allQueries(), battleQuery) : 0;
+	int queriedPlayers = 0;
+	if(battleQuery)
+	{
+		auto allQueries = gameHandler->queries->allQueries();
+		for(const auto & q : allQueries)
+			if(q == battleQuery)
+				queriedPlayers++;
+	}
 
 	assert(finishingBattles.count(battle.getBattle()->getBattleID()) == 0);
 	finishingBattles[battle.getBattle()->getBattleID()] = std::make_unique<FinishingBattleHelper>(battle, *battleResult, queriedPlayers);
@@ -353,7 +361,7 @@ void BattleResultProcessor::endBattleConfirm(const CBattleInfoCallback & battle)
 				if(!strongestHero || hero->exp > strongestHero->exp)
 					strongestHero = hero;
 			if(strongestHero->id == finishingBattle->loserId && strongestHero->level > 5 && finishingBattle->victor.isValidPlayer())
-				gameHandler->statistics->getPlayerAccumulator(finishingBattle->victor).lastDefeatedStrongestHeroDay = gameHandler->gameState().getDate(Date::DAY);
+				gameHandler->statistics->getPlayerAccumulator(finishingBattle->victor).lastDefeatedStrongestHeroDay = gameHandler->gameState().getCalendar().getDayOfMonth();
 		}
 	}
 
