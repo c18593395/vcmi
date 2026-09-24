@@ -184,6 +184,10 @@ void CVCMIServer::onPacketReceived(const std::shared_ptr<INetworkConnection> & c
 
 	CVCMIServerPackVisitor visitor(*this, this->gh, c);
 	pack->visit(visitor);
+
+	// ML fix (09-24): 当前包处理完再停机 (SHUTDOWN 语义延迟, 见 setState 注释)
+	if (state == EServerState::SHUTDOWN)
+		networkHandler->stop();
 }
 
 void CVCMIServer::setState(EServerState value)
@@ -201,8 +205,9 @@ void CVCMIServer::setState(EServerState value)
 
 	state = value;
 
-	if (state == EServerState::SHUTDOWN)
-		networkHandler->stop();
+	// ML fix (09-24): 不在此处立即 stop —— 胜负判定发生在包处理中途, 立即 stop 会截断
+	// 包流(PackageApplied/胜利包不再发) → 客户端 AI 永久等 realize → 冻结。
+	// 改为 onPacketReceived 完成当前包后停机 (见该函数尾部)。
 }
 void CVCMIServer::startDiscoveryListener()
 {
