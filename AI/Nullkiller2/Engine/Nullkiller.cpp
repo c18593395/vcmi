@@ -8,6 +8,21 @@
 *
 */
 #include "StdInc.h"
+
+// ML fix (09-24): 规划链耗时打点 (trade 循环无上界 + 锁内全量重算取证)
+struct MlTimeGuard {
+	const char * name;
+	std::chrono::steady_clock::time_point t0;
+	MlTimeGuard(const char * n) : name(n), t0(std::chrono::steady_clock::now())
+	{
+		fprintf(stderr, "[ML-time] %s ENTER\n", name);
+	}
+	~MlTimeGuard()
+	{
+		auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+		fprintf(stderr, "[ML-time] %s EXIT %lldms\n", name, (long long)ms);
+	}
+};
 #include "Nullkiller.h"
 
 #include "../../../lib/CPlayerState.h"
@@ -509,6 +524,7 @@ HeroLockedReason Nullkiller::getHeroLockedReason(const CGHeroInstance * hero) co
 
 void Nullkiller::makeTurn()
 {
+	MlTimeGuard _mltg("Nullkiller::makeTurn");
 	pathfinderTurnStorageMisses.store(0);
 	const int MAX_DEPTH = 10;
 	resetState();

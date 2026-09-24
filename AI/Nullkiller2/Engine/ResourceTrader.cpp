@@ -7,6 +7,21 @@
 * Full text of license available in license.txt file, in main folder
 */
 #include "StdInc.h"
+
+// ML fix (09-24): 规划链耗时打点 (trade 循环无上界 + 锁内全量重算取证)
+struct MlTimeGuard {
+	const char * name;
+	std::chrono::steady_clock::time_point t0;
+	MlTimeGuard(const char * n) : name(n), t0(std::chrono::steady_clock::now())
+	{
+		fprintf(stderr, "[ML-time] %s ENTER\n", name);
+	}
+	~MlTimeGuard()
+	{
+		auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+		fprintf(stderr, "[ML-time] %s EXIT %lldms\n", name, (long long)ms);
+	}
+};
 #include "ResourceTrader.h"
 
 namespace NK2AI
@@ -41,10 +56,18 @@ bool ResourceTrader::trade(BuildAnalyzer & buildAnalyzer, CCallback & cc, const 
 	// return false;
 
 	bool shouldTryToTrade = true;
+	int mlTradePasses = 0;  // ML fix (09-24): 交易循环熔断 cap 16 — 循环无上界时每轮全量 update() 持共享锁狂转 → 写锁饥饿冻结
+	auto mlTradeT0 = std::chrono::steady_clock::now();
 	while(shouldTryToTrade)
 	{
 		shouldTryToTrade = false;
 		buildAnalyzer.update();
+		if(++mlTradePasses > 16)
+		{
+			fprintf(stderr, "[ML-fix] trade BREAK pass=%d (loop cap)\n", mlTradePasses);
+			break;
+		}
+
 
 		// if we favor getResourcesRequiredNow is better on short term, if we favor getTotalResourcesRequired is better on long term
 		TResources missingNow = buildAnalyzer.getMissingResourcesNow(ARMY_GOLD_RATIO_PER_MAKE_TURN_PASS);
@@ -70,6 +93,8 @@ bool ResourceTrader::trade(BuildAnalyzer & buildAnalyzer, CCallback & cc, const 
 			shouldTryToTrade = true;
 		}
 	}
+	auto mlTradeMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - mlTradeT0).count();
+	fprintf(stderr, "[ML-time] trade EXIT passes=%d %lldms\n", mlTradePasses, (long long)mlTradeMs);
 	return haveTraded;
 }
 

@@ -8,6 +8,21 @@
 *
 */
 #include "../StdInc.h"
+
+// ML fix (09-24): 规划链耗时打点 (trade 循环无上界 + 锁内全量重算取证)
+struct MlTimeGuard {
+	const char * name;
+	std::chrono::steady_clock::time_point t0;
+	MlTimeGuard(const char * n) : name(n), t0(std::chrono::steady_clock::now())
+	{
+		fprintf(stderr, "[ML-time] %s ENTER\n", name);
+	}
+	~MlTimeGuard()
+	{
+		auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+		fprintf(stderr, "[ML-time] %s EXIT %lldms\n", name, (long long)ms);
+	}
+};
 #include "BuildAnalyzer.h"
 
 #include "../Engine/Nullkiller.h"
@@ -55,6 +70,7 @@ bool BuildAnalyzer::isGoldPressureOverMax() const
 
 void BuildAnalyzer::update()
 {
+	MlTimeGuard _mltg("BuildAnalyzer::update");
 	logAi->trace("Start BuildAnalyzer::update");
 	reset();
 	const auto towns = aiNk->cc->getTownsInfo();
