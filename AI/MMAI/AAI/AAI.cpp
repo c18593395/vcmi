@@ -405,12 +405,13 @@ void AAI::battleStart(
 	if(side == BattleSide::ATTACKER)
 	{
 		hero = dynamic_cast<const CGHeroInstance *>(army1);
-		info("Will play with " + hero->getNameTextID() + " on the left side (ATTACKER) in this battle");
+		// ML fix (09-24): 无英雄参战(中立怪战)时 dynamic_cast 得 null, 判空防 SEGV (core.5836)
+		info(std::string("Will play with ") + (hero ? hero->getNameTextID() : std::string("<no hero>")) + " on the left side (ATTACKER) in this battle");
 	}
 	else
 	{
 		hero = dynamic_cast<const CGHeroInstance *>(army2);
-		info("Will play with " + hero->getNameTextID() + " on the right side (DEFENDER) in this battle");
+		info(std::string("Will play with ") + (hero ? hero->getNameTextID() : std::string("<no hero>")) + " on the right side (DEFENDER) in this battle");
 	}
 
 	// just copied code from CAdventureAI::battleStart

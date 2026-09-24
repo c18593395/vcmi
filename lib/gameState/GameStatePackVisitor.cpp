@@ -1434,7 +1434,14 @@ void GameStatePackVisitor::visitBattleCancelled(BattleCancelled & pack)
 	{
 		if (currentBattle.getSide(i).heroID.hasValue())
 		{
-			CGHeroInstance * hero = gs.getHero(currentBattle.getSideHero(i)->id);
+			// ML fix (09-24): 同 visitBattleResultsApplied, 英雄战死后判空 (防 SEGV)
+			const CGHeroInstance * sideHero = currentBattle.getSideHero(i);
+			CGHeroInstance * hero = sideHero ? gs.getHero(sideHero->id) : nullptr;
+			if(!hero)
+			{
+				fprintf(stderr, "[ML-fix] battleCancelled: side %d hero gone (died in battle), skip mana restore\n", static_cast<int>(i));
+				continue;
+			}
 			hero->mana = currentBattle.getSide(i).initialMana;
 		}
 	}
@@ -1467,7 +1474,15 @@ void GameStatePackVisitor::visitBattleResultsApplied(BattleResultsApplied & pack
 	{
 		if (currentBattle.getSide(i).heroID.hasValue())
 		{
-			CGHeroInstance * hero = gs.getHero(currentBattle.getSideHero(i)->id);
+			// ML fix (09-24): 英雄战死时已被移出 gs (objects[id]=nullptr), 但 side.heroID 残留
+			// → getHero 返回 null → mana 解引用 SEGV (core.2888 实锤: 防守方英雄阵亡局)
+			const CGHeroInstance * sideHero = currentBattle.getSideHero(i);
+			CGHeroInstance * hero = sideHero ? gs.getHero(sideHero->id) : nullptr;
+			if(!hero)
+			{
+				fprintf(stderr, "[ML-fix] battleResultsApplied: side %d hero gone (died in battle), skip mana restore\n", static_cast<int>(i));
+				continue;
+			}
 			hero->mana = std::min(hero->mana, currentBattle.getSide(i).initialMana);
 		}
 	}
