@@ -581,6 +581,7 @@ static void fill_v3_fields(StrategicState* state, CGameInfoCallback* gicb) {
 }
 
 // 冒险回合处理 — 被 AAI::yourTurn 直接调用
+static std::atomic<int> s_force_game_over{-1};  // ML fix (09-24): PlayerEndsGame 强制终局
 static std::atomic<int> s_turn_player{-1};
 static std::atomic<bool> s_turn_action_ready{false};
 static std::atomic<int> s_turn_action{0};
@@ -752,6 +753,9 @@ static void fill_strategic_state(void* cbPtr) {
         }
         if (alive_count <= 1 && state->player_count > 1)
             state->game_over = last_alive + 1;
+        // ML fix (09-24): 强制终局优先 (同引用版)
+        if (s_force_game_over.load(std::memory_order_acquire) >= 0)
+            state->game_over = s_force_game_over.load(std::memory_order_acquire) + 1;
 
         // C 事件奖励: 矿归属表 (battle_result 不清零)
         // C 事件奖励: 矿归属表 (battle_result 不清零)
@@ -825,7 +829,15 @@ extern "C" void adventure_capture_noblock(int playerColor, void* userData, int a
 }
 
 // 非阻塞轮询: 有新数据返回玩家号并消费, 无数据返回 -2
+// ML fix (09-24): 终局强制置位 — 由 client 侧 visitPlayerEndsGame 调用
+extern "C" void strategic_state_force_game_over(int winner_player) {
+    s_force_game_over.store(winner_player, std::memory_order_release);
+    fprintf(stderr, "[ML-fix] force game_over: winner=%d\n", winner_player);
+}
+
 extern "C" int adventure_try_wait() {
+    // ML fix (09-24): 终局强制置位后立即返回 -2 (done 路径)
+    if (s_force_game_over.load(std::memory_order_acquire) >= 0) return -2;
     int p = s_turn_player.load(std::memory_order_acquire);
     if (p >= 0) {
         s_turn_player.store(-1, std::memory_order_release);
@@ -840,6 +852,8 @@ extern "C" int adventure_wait_for_turn() {
         int gen = s_turn_generation.load(std::memory_order_acquire);
         int p = s_turn_player.load(std::memory_order_acquire);
         if (p >= 0 && gen != s_last_waited_gen) break;  // new generation only: stale s_turn_player=0 must not fire
+        // ML fix (09-24): 终局后 yourTurn 不再来, 检测到强制置位立即退出等待 (-2 → done)
+        if (s_force_game_over.load(std::memory_order_acquire) >= 0) return -2;
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         spins++;
     }
@@ -979,6 +993,9 @@ extern "C" void strategic_state_update(void* game_state_ptr) {
         }
         if (alive_count <= 1 && state.player_count > 1)
             state.game_over = last_alive + 1;
+        // ML fix (09-24): 强制终局优先于 alive 推导 (胜利后 update 可能不再触发)
+        if (s_force_game_over.load(std::memory_order_acquire) >= 0)
+            state.game_over = s_force_game_over.load(std::memory_order_acquire) + 1;
 
         // C 事件奖励: 矿归属表 (battle_result 不清零)
         fill_mines(&state, gs);

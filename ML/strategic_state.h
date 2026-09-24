@@ -168,6 +168,7 @@ extern "C" void adventure_send_action(int action);
 extern "C" void adventure_capture_turn(int playerColor, void* userData, int action);
 extern "C" void adventure_capture_noblock(int playerColor, void* userData, int action);
 extern "C" int  adventure_try_wait();
+extern "C" void strategic_state_force_game_over(int winner_player);  // ML fix (09-24)
 extern "C" int  adventure_get_action();
 extern "C" void adventure_cb_trampoline(int playerColor, void* userData);
 extern "C" void register_adventure_delegate(void (*delegate)(int, void*), void* userdata);

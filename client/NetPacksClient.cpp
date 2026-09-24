@@ -403,8 +403,19 @@ void ApplyClientNetPackVisitor::visitChangeObjPos(ChangeObjPos & pack)
 	callAllInterfaces(cl, &CGameInterface::invalidatePaths);
 }
 
+extern "C" void strategic_state_force_game_over(int winner_player);  // ML fix: ML/strategic_state
+
 void ApplyClientNetPackVisitor::visitPlayerEndsGame(PlayerEndsGame & pack)
 {
+    // ML fix (09-24): 胜负判定后 yourTurn 不再回调 → NK2/connector 永久等。
+    // 立即强制置位 game_over, 唤醒 adventure_wait_* 返回 -2 (connector 按game_over结算)。
+    // 1v1 口径: player 0=RED 1=BLUE; victory 时赢家=pack.player, 否则=对手。
+    {
+        const int p = pack.player.getNum();
+        const int winner = pack.victoryLossCheckResult.victory() ? p : (1 - p);
+        if (p == 0 || p == 1)
+            strategic_state_force_game_over(winner);
+    }
 	callAllInterfaces(cl, &IGameEventsReceiver::gameOver, pack.player, pack.victoryLossCheckResult);
 
 	bool localHumanWinsGame = vstd::contains(cl.playerint, pack.player) && cl.gameInfo().getPlayerState(pack.player)->human && pack.victoryLossCheckResult.victory();
