@@ -201,13 +201,28 @@ endif()
 target_link_libraries(MMAI PRIVATE BattleAI StupidAI)
 
 # PyGILState_Ensure/Release used in AAI::yourTurn
-target_link_libraries(MMAI PRIVATE /usr/lib/x86_64-linux-gnu/libpython3.12.so)
+# T14.3b (09-27): cross-arch python3 dev discovery — replaces the hardcoded
+# /usr/lib/x86_64-linux-gnu/libpython3.12.so (c80796a17) that broke the ARM build
+# (had been papered over with /usr symlink bridges on 172.16.2.40).
+find_path(T14_PYTHON3_INCLUDE_DIR NAMES Python.h
+  HINTS /usr/include /usr/local/include
+  PATH_SUFFIXES python3.12 python3.11 python3.10 python3
+)
+find_library(T14_PYTHON3_LIBRARY NAMES python3.12 python3.11 python3.10 python3
+  HINTS /usr/lib /usr/lib64 /usr/lib/x86_64-linux-gnu /usr/local/lib
+)
+if(T14_PYTHON3_INCLUDE_DIR AND T14_PYTHON3_LIBRARY)
+  message(STATUS "MMAI python3 dev: ${T14_PYTHON3_INCLUDE_DIR} + ${T14_PYTHON3_LIBRARY}")
+  target_link_libraries(MMAI PRIVATE ${T14_PYTHON3_LIBRARY})
+  target_include_directories(MMAI PRIVATE ${T14_PYTHON3_INCLUDE_DIR})
+else()
+  message(FATAL_ERROR "python3 development files not found (need Python.h + libpython3.x); install python3-devel")
+endif()
 
 # Used in schema/base.h to determine if it is imported by MMAI or vcmi-gym
 target_compile_definitions(MMAI PRIVATE MMAI_DLL=1)
 target_include_directories(MMAI
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
-  PRIVATE "/usr/include/python3.12"
 )
 
 if(ENABLE_MMAI_TEST)

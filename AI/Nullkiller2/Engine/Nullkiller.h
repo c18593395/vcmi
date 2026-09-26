@@ -129,6 +129,13 @@ public:
 	/// T14 (09-26): per-turn pursuit hook, called from makeTurn after defender reservation.
 	/// NK2 default = empty (zero behavior change); T14Blue::T14Nullkiller overrides it (R13 harvest nudge).
 	virtual void onPursueTurn() {}
+	/// T14.3b (09-27): post-selection hard-goal-injection hook, called from makeTurn after
+	/// the selected task vector is sorted; NK2 default = empty (zero behavior change);
+	/// T14Blue::T14Nullkiller overrides it (committed march task spliced into the stream).
+	virtual void onCommitPursuit(Goals::TTaskVec & selectedTasks) {}
+	/// T14.3b (09-27): post-init hook, called at the tail of init(); NK2 default = empty;
+	/// T14Blue::T14Nullkiller overrides it (one-shot archetype Settings weight axis).
+	virtual void onAfterInit() {}
 	bool updateStateAndExecutePriorityPass(Goals::TGoalVec& tempResults, int passIndex);
 	bool isActive(const CGHeroInstance * hero) const { return activeHero == hero; }
 	bool isHeroLocked(const CGHeroInstance * hero) const;

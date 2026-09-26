@@ -66,4 +66,12 @@ namespace NK2AI
 		useTroopsFromGarrisons = node["useTroopsFromGarrisons"].Bool();
 		useOneWayMonoliths = node["useOneWayMonoliths"].Bool();
 	}
+#ifdef ENABLE_T14_BLUE
+	void Settings::setT14Weights(float mGP, float rTRel, int mHeroDist)
+	{
+		maxGoldPressure = mGP;
+		retreatThresholdRelative = rTRel;
+		mainHeroTurnDistanceLimit = mHeroDist;
+	}
+#endif
 }

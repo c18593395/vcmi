@@ -62,5 +62,10 @@ namespace NK2AI
 		bool isOneWayMonolithUsageAllowed() const { return useOneWayMonoliths; }
 		bool isUpdateHitmapOnTileReveal() const { return updateHitmapOnTileReveal; }
 		bool isOpenMap() const { return openMap; }
+#ifdef ENABLE_T14_BLUE
+		// T14.3b (09-27) weight axis: archetype-weighted overrides. Gated, and never
+		// called by stock Nullkiller -> zero behavior change for the NK2 build.
+		void setT14Weights(float maxGoldPressure, float retreatThresholdRelative, int mainHeroTurnDistanceLimit);
+#endif
 	};
 }

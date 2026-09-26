@@ -135,6 +135,9 @@ void Nullkiller::init(const std::shared_ptr<CCallback> & cbInput, AIGateway * ai
 	heroManager.reset(new HeroManager(cc.get(), this));
 	decomposer.reset(new DeepDecomposer(this));
 	armyFormation.reset(new ArmyFormation(cc, this));
+
+	// T14.3b (09-27): post-init hook — NK2 empty default (zero behavior change).
+	onAfterInit();
 }
 
 TaskPlanItem::TaskPlanItem(const TSubgoal & task)
@@ -258,6 +261,13 @@ Goals::TTaskVec Nullkiller::buildPlanAndFilter(
 			for(size_t i = r.begin(); i != r.end(); i++)
 			{
 				const auto & task = tasks[i];
+#ifdef ENABLE_T14_BLUE
+				// T14.3b (09-27) pinned band: committed T14 march tasks carry a priority
+				// >= 1e7 — above NK2's organic cap (DEFENSIVE_EMERGENCY_PRIORITY = 1e6) —
+				// so they keep it verbatim and always lead the tier pass.
+				if(task->asTask()->priority >= 10000000.0f)
+					continue;
+#endif
 				if(task->asTask()->priority <= 0 || priorityTier != PriorityEvaluator::PriorityTier::BUILDINGS)
 					task->asTask()->priority = evaluator->evaluate(
 						task,
@@ -587,6 +597,10 @@ void Nullkiller::makeTurn()
 		{
 			return a->priority > b->priority;
 		});
+
+		// T14.3b (09-27): post-selection hard-goal-injection hook — NK2 empty default
+		// (zero behavior change); T14Nullkiller splices a committed march task in.
+		onCommitPursuit(selectedTasks);
 
 		if(selectedTasks.empty())
 		{
