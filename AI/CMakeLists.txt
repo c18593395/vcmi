@@ -21,3 +21,7 @@ add_subdirectory(EmptyAI)
 if(ENABLE_NULLKILLER2_AI)
 	add_subdirectory(Nullkiller2)
 endif()
+
+if(ENABLE_T14_BLUE)
+	add_subdirectory(T14BlueMod)
+endif()

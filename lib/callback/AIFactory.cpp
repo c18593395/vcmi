@@ -24,6 +24,9 @@
 #ifdef ENABLE_MMAI
 #  include "../../AI/MMAI/MMAI.h"
 #endif
+#ifdef ENABLE_T14_BLUE
+#  include "../../AI/T14BlueMod/T14BlueGateway.h"
+#endif
 // Note: MMAI not instantiated here - it's loaded at runtime via the AI plugin system
 // The MMAI::AAI::AAI class is available but not directly created in libvcmiMain
 #include "../../AI/EmptyAI/CEmptyAI.h"
@@ -58,7 +61,20 @@ std::shared_ptr<CGlobalAI> AIFactory::createAdventureAI(const std::string & name
 	}
 #endif
 
-	auto ret = std::make_shared<CEmptyAI>();
+#ifdef ENABLE_T14_BLUE
+	if(name == "T14Blue")
+	{
+#ifdef ENABLE_NULLKILLER2_AI
+		auto ret = std::make_shared<T14Blue::T14BlueGateway>();
+		ret->dllName = name;
+		return ret;
+#else
+		throw std::runtime_error("T14Blue requires ENABLE_NULLKILLER2_AI in this build!");
+#endif
+	}
+#endif
+
+auto ret = std::make_shared<CEmptyAI>();
 	ret->dllName = name;
 	return ret;
 }
@@ -97,6 +113,10 @@ bool AIFactory::isAvailableAdventureAI(const std::string & name)
 		return true;
 #ifdef ENABLE_NULLKILLER2_AI
 	if(name == "Nullkiller2")
+		return true;
+#endif
+#ifdef ENABLE_T14_BLUE
+	if(name == "T14Blue")
 		return true;
 #endif
 	return false;

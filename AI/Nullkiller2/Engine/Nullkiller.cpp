@@ -544,6 +544,10 @@ void Nullkiller::makeTurn()
 
 		reserveRequiredTownDefenders();
 
+		// T14 (09-26): per-turn pursuit hook — NK2 empty default (zero behavior change);
+		// T14Nullkiller overrides it to re-assert strongest-hero -> enemy-town march target.
+		onPursueTurn();
+
 		tasks.clear();
 		decompose(tasks, sptr(CaptureObjectsBehavior()), 1);
 		decompose(tasks, sptr(ClusterBehavior()), MAX_DEPTH);

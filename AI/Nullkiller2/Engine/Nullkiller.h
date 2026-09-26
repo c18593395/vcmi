@@ -126,6 +126,9 @@ public:
 	virtual ~Nullkiller();
 	void init(const std::shared_ptr<CCallback> & cbInput, AIGateway * aiGwInput);
 	virtual void makeTurn();
+	/// T14 (09-26): per-turn pursuit hook, called from makeTurn after defender reservation.
+	/// NK2 default = empty (zero behavior change); T14Blue::T14Nullkiller overrides it (R13 harvest nudge).
+	virtual void onPursueTurn() {}
 	bool updateStateAndExecutePriorityPass(Goals::TGoalVec& tempResults, int passIndex);
 	bool isActive(const CGHeroInstance * hero) const { return activeHero == hero; }
 	bool isHeroLocked(const CGHeroInstance * hero) const;

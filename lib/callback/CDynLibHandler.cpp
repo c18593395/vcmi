@@ -32,6 +32,9 @@
 #  ifdef ENABLE_MMAI
 #    include "../../AI/MMAI/MMAI.h"
 #  endif
+#  ifdef ENABLE_T14_BLUE
+#    include "../../AI/T14BlueMod/T14BlueGateway.h"
+#  endif
 #  include "../../AI/EmptyAI/CEmptyAI.h"
 #else
 # ifdef VCMI_WINDOWS
@@ -141,6 +144,12 @@ std::shared_ptr<CGlobalAI> createAny(const boost::filesystem::path & libpath, co
 	if(libpath.stem() == "libMMAI") {
 		return std::make_shared<MMAI::AAI::AAI>();
 	}
+#endif
+
+#ifdef ENABLE_T14_BLUE
+	// T14 blue-side strategic AI (NK2-derived harvest layer, 09-26 T14.3)
+	if(libpath.stem() == "libT14Blue")
+		return std::make_shared<T14Blue::T14BlueGateway>();
 #endif
 
 	return std::make_shared<CEmptyAI>();
