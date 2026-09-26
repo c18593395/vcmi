@@ -166,6 +166,42 @@ bool moveOneStepToward(CCallback * cb, const CGHeroInstance * hero, const int3 &
 	} catch(...) { return false; }
 }
 
+// 09-27 v3: 多方向回退走格 — 贪心单方向会被目标途中阻挡格卡死 (城格 NW 挡路实锤:
+// (3,3)→standPos(1,2) 最大点积=NW=(2,2) 城格, 每拍被拒 → 英雄整窗冻结)。
+// 8 方向按与 (dx,dy) 点积降序逐试, 以 hero->pos 实际变化判定成功; 走上城 visitable 格
+// 会自动触发 town visit (招兵窗前置态), 正合 case16-18 用途。
+bool moveTowardFallback(CCallback * cb, const CGHeroInstance * hero, const int3 & target)
+{
+	if (!cb || !hero) return false;
+	int dx = target.x - hero->pos.x;
+	int dy = target.y - hero->pos.y;
+	if (dx == 0 && dy == 0) return false;
+	static const int ddx[8] = {0, 1, 1, 1, 0, -1, -1, -1};
+	static const int ddy[8] = {-1, -1, 0, 1, 1, 1, 0, -1};
+	int order[8];
+	int64_t dots[8];
+	for (int d = 0; d < 8; d++) {
+		dots[d] = (int64_t)dx * ddx[d] + (int64_t)dy * ddy[d];
+		order[d] = d;
+	}
+	// 简单插入排序 (8 元素): 点积降序
+	for (int i = 1; i < 8; i++) {
+		int oi = order[i]; int64_t di = dots[i];
+		int j = i - 1;
+		while (j >= 0 && dots[order[j]] < di) { order[j + 1] = order[j]; j--; }
+		order[j + 1] = oi;
+	}
+	const int3 before = hero->pos;
+	for (int i = 0; i < 8; i++) {
+		if (dots[order[i]] <= 0) break;  // 只试前进/侧向, 不往回走
+		int3 cand(hero->pos.x + ddx[order[i]], hero->pos.y + ddy[order[i]], hero->pos.z);
+		try { cb->moveHero(hero, cand, false); } catch(...) { continue; }
+		if (hero->pos != before)
+			return true;  // 实际位移成功 (可能已触发城 visit)
+	}
+	return false;
+}
+
 // 执行动作 11-24。MOVE_TO 返回目标格 (供锁外 2s 等待), 其余返回 (-1,-1,-1)。
 int3 executeAdvancedAction(CCallback * cb, int a, const CGHeroInstance * cur)
 {
@@ -243,8 +279,33 @@ int3 executeAdvancedAction(CCallback * cb, int a, const CGHeroInstance * cur)
 	{
 		auto town = nearestOwnTown(cb, cur);
 		if (!town) return noTarget;
-		const CArmedInstance * dst = town->getUpperArmy();
+		// 09-27 v5: 放弃 visiting 路线 — visitablePos 依赖几何 (T06 duel 城 (2,2) 实测
+		// visitable=(0,2) 图边缘外, 英雄永远进不了 visiting 态, v1-v4 全被此卡死)。
+		// 零几何方案: ① dst=town 招进 garrison (引擎 dst 三选一恒合法)
+		// ② mergeStacks 把本次新增 garrison 全量并入英雄部队 (showGarrisonDialog 08-27 同款原语)。
+		// T06 城 garrison 初始为空 (obs 全 0), 快照对比只搬新增, 无副作用。
+		const CArmedInstance * dst = town;
 		const auto & creatures = town->creatures; // creatures[level(0-based)] -> {count, {base, upgrades}}
+		fprintf(stderr, "[RECDBG] a=%d hero=(%d,%d) visitedTown=%d avail=", a, cur->pos.x, cur->pos.y, cur->getVisitedTown() ? 1 : 0);
+		for (size_t lv = 0; lv < creatures.size() && lv < 7; lv++)
+			fprintf(stderr, "[L%zu:%d/%zu]", lv, creatures[lv].first, creatures[lv].second.size());
+		fprintf(stderr, "\n");
+		// 09-27 v6: garrison→hero 合并在拍首 — 上一拍 recruit 此刻已应用 (sendRequest 异步
+		// 一拍延迟), 此处 garrison 可见; 城上出生 → visiting 常在 → 交换位满足 → 兵直上英雄。
+		for (const auto & [slot, stack] : town->Slots())
+		{
+			if (!stack || stack->getCount() <= 0) continue;
+			SlotID dslot = cur->getSlotFor(stack->getCreature());
+			if (!dslot.validSlot())
+				dslot = cur->getFreeSlot();
+			fprintf(stderr, "[MERGEDBG] slot=%d cnt=%d dslot=%d visiting=%d\n",
+				slot.getNum(), stack->getCount(), dslot.validSlot() ? dslot.getNum() : -1,
+				cur->getVisitedTown() ? 1 : 0);
+			try {
+				if (dslot.validSlot())
+					cb->mergeOrSwapStacks(town, cur, slot, dslot);
+			} catch(...) { fprintf(stderr, "[MERGEDBG] exception\n"); }
+		}
 		if (a == 16 || a == 17)
 		{
 			int from = 0, to = (int)creatures.size() - 1, step = 1;
@@ -254,7 +315,7 @@ int3 executeAdvancedAction(CCallback * cb, int a, const CGHeroInstance * cur)
 				if (i < 0 || i >= (int)creatures.size()) continue;
 				// 可招募判断用 second (生物列表) 非空 — first (可招数量) 由每周 newWeek 填充, day1 可能为 0
 				// 引擎侧 recruitCreatures 会自行 clamp 到 cur.first (招 0 个不扣钱=本周无兵, 正确行为)
-				if (!creatures[i].second.empty())
+				if (!creatures[i].second.empty() && creatures[i].first > 0)
 				{
 					cb->recruitCreatures(town, dst, creatures[i].second.front(), 1, i);
 					break;
@@ -265,7 +326,7 @@ int3 executeAdvancedAction(CCallback * cb, int a, const CGHeroInstance * cur)
 		{
 			for (int i = 0; i < (int)creatures.size(); i++)
 			{
-				if (!creatures[i].second.empty())
+				if (!creatures[i].second.empty() && creatures[i].first > 0)
 					cb->recruitCreatures(town, dst, creatures[i].second.front(), 1, i);
 			}
 		}
