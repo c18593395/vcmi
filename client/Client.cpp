@@ -584,7 +584,8 @@ void CClient::onNewSystemMessageReceived(const std::string & messageText)
 void CClient::removeGUI() const
 {
 	// CClient::endGame
-	ENGINE->windows().clear();
+	if (ENGINE) // #215 guard (09-26): headless 无 GUI, 二次崩点
+		ENGINE->windows().clear();
 	adventureInt.reset();
 	logGlobal->info("Removed GUI.");
 

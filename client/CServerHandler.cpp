@@ -692,10 +692,13 @@ void CServerHandler::sendGuiAction(ui8 action) const
 
 void CServerHandler::sendRestartGame() const
 {
+	if (ENGINE) // #215 guard (09-26): headless ENGINE 恒 null, 收 LobbyStartGame 广播必经此路径
+	{
 	if(si->campState && !si->campState->getLoadingBackground().empty())
 		ENGINE->windows().createAndPushWindow<CLoadingScreen>(si->campState->getLoadingBackground());
 	else
 		ENGINE->windows().createAndPushWindow<CLoadingScreen>();
+	}
 	
 	LobbyRestartGame endGame;
 	sendLobbyPack(endGame);
@@ -731,10 +734,13 @@ void CServerHandler::sendStartGame(bool allowOnlyAI, bool verify) const
 
 	if(!settings["session"]["headless"].Bool())
 	{
+		if (ENGINE) // #215 guard (09-26): 同上 (sendStartGame)
+		{
 		if(si->campState && !si->campState->getLoadingBackground().empty())
 			ENGINE->windows().createAndPushWindow<CLoadingScreen>(si->campState->getLoadingBackground());
 		else
 			ENGINE->windows().createAndPushWindow<CLoadingScreen>();
+		}
 	}
 	
 	LobbyPrepareStartGame lpsg;
@@ -807,7 +813,8 @@ void CServerHandler::showHighScoresAndEndGameplay(PlayerColor player, bool victo
 
 		endGameplay();
 		GAME->mainmenu()->menu->switchToTab("main");
-		ENGINE->windows().createAndPushWindow<CHighScoreInputScreen>(victory, scenarioHighScores, statistic);
+		if (ENGINE) // #215 guard (09-26)
+			ENGINE->windows().createAndPushWindow<CHighScoreInputScreen>(victory, scenarioHighScores, statistic);
 	}
 }
 
@@ -830,7 +837,8 @@ void CServerHandler::endGameplay()
 		GAME->mainmenu()->makeActiveInterface();
 	}
 
-	ENGINE->discord().setStatus("", "", {0, 0});
+	if (ENGINE) // #215 guard (09-26)
+		ENGINE->discord().setStatus("", "", {0, 0});
 }
 
 std::optional<std::string> CServerHandler::canQuickLoadGame(const std::string & path) const
@@ -946,8 +954,11 @@ void CServerHandler::startCampaignScenario(HighScoreParameter param, std::shared
 
 void CServerHandler::showServerError(const std::string & txt) const
 {
+	if (ENGINE) // #215 guard (09-26)
+	{
 	if(auto w = ENGINE->windows().topWindow<CLoadingScreen>())
 		ENGINE->windows().popWindow(w);
+	}
 	
 	CInfoWindow::showInfoDialog(txt, {});
 }

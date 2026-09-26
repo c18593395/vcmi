@@ -41,6 +41,12 @@ endif()
 
 target_link_libraries(vcmiclient PRIVATE vcmiclientcommon)
 
+# ML (#215): vcmiclient 硬引用 mlclient 符号 (visitPlayerEndsGame/g_adventure_allied_ai),
+# 09-19 上游重同步冲掉此链接行 -> 补回 (7/26 起 vcmiclient 可执行体链接失败根因)
+if(ENABLE_ML)
+	target_link_libraries(vcmiclient PRIVATE mlclient)
+endif()
+
 if(ENABLE_SINGLE_APP_BUILD AND ENABLE_LAUNCHER)
 	target_link_libraries(vcmiclient PRIVATE vcmilauncher)
 endif()

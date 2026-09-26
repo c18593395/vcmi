@@ -1,5 +1,10 @@
 {
-	"mods" : {
-		"validation" : "off"
-	}
+  "mods": {
+    "validation": "off"
+  },
+  "server": {
+    "ML": {
+      "statsMode": "disabled"
+    }
+  }
 }
