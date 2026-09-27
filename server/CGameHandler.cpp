@@ -4329,6 +4329,29 @@ bool CGameHandler::isBlockedByQueries(const CPackForServer *pack, PlayerColor pl
 	if(dynamic_cast<const AdvInterfaceReady *>(pack) != nullptr)
 		return false;
 
+#ifdef ENABLE_ML
+	// P-017 (09-27) 查询栈看门狗 — Mode B 死锁根修(09-23 定谳方向①):
+	// 栈顶若挂"目标对象已被移除的僵尸 MapObjectVisitQuery"(getObjInstance==null),
+	// 该 visit 永不自然结束(VisitQuery::blocksPack 恒 true, VisitQueries.cpp:33) →
+	// EndTurn 在内的全部包被挡 → AI 线程 sendRequest→waitWhileContains 永挂
+	// → 双 AI 死锁 + runNetwork 空转 epoll(09-23 gdb 实锤: top=null / popIfTop FAIL)。
+	// 阻塞判定前先走 08-17 安全移除链(removeQuery=任意位擦除+onRemoval+onExposure续链,
+	// FORCE-REMOVE 哨兵, QueriesProcessor.cpp:107) 清僵尸层; while 连环清多层污染;
+	// 对象还在的活 query 绝不清。非 ML 构建零行为变化。
+	{
+		QueryPtr top = queries->topQuery(player);
+		while (top)
+		{
+			auto * stuckVisit = queries->queryAs<MapObjectVisitQuery>(top);
+			if (!stuckVisit || gameInfo().getObjInstance(stuckVisit->visitedObject))
+				break; // 非僵尸 visit(活 query/其他类型) → 停, 回原阻塞判定
+			fprintf(stderr, "[ML-watchdog] FORCE-REMOVE clogged MapObjectVisitQuery player=%d %s\n",
+				player.getNum(), stuckVisit->toString().c_str());
+			queries->removeQuery(top);
+			top = queries->topQuery(player); // 多层污染: 清完看下一层
+		}
+	}
+#endif
 	auto query = queries->topQuery(player);
 	if (query && query->blocksPack(pack))
 	{
